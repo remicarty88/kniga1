@@ -8,6 +8,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="description" content="Bookify — читай, слушай и открывай новые книги." />
 <title>Bookify</title>
+<link rel="icon" href="assets/images/bookify-logo.jpg" type="image/jpeg" />
+<link rel="apple-touch-icon" href="assets/images/bookify-logo.jpg" />
 <link rel="manifest" href="manifest.webmanifest" />
 <link rel="stylesheet" href="styles.css" />
 </head>
@@ -15,7 +17,8 @@
 
 <header class="topbar" id="topbar">
   <div class="brand">
-    <span class="brand-name">Bookify</span>
+    <img class="brand-mark" src="assets/images/bookify-logo.jpg" alt="" />
+    <span class="brand-name"><span>Book</span><i>ify</i></span>
   </div>
   <div class="topbar-actions">
     <button class="icon-btn" id="btn-mode" aria-label="Читать или слушать" title="Читать или слушать">
@@ -76,17 +79,17 @@
     <svg viewBox="0 0 24 24" fill="none"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v17H6.5A2.5 2.5 0 0 0 4 22zM20 5.5A2.5 2.5 0 0 0 17.5 3H13v17h4.5a2.5 2.5 0 0 1 2.5 2z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
     <span class="tabbar-label">Библиотека</span>
   </button>
-  <button class="tabbar-btn" data-tab="audio" aria-label="Аудио">
+  <button class="tabbar-btn tabbar-listen" data-tab="player" aria-label="Слушать">
     <svg viewBox="0 0 24 24" fill="none"><path d="M4 10v4m4-8v12m4-15v18m4-14v10m4-7v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-    <span class="tabbar-label">Аудио</span>
+    <span class="tabbar-label">Слушать</span>
   </button>
-  <button class="tabbar-btn" data-tab="read" aria-label="Читать">
-    <svg viewBox="0 0 24 24" fill="none"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v17H6.5A2.5 2.5 0 0 0 4 22zM20 5.5A2.5 2.5 0 0 0 17.5 3H13v17h4.5a2.5 2.5 0 0 1 2.5 2z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-    <span class="tabbar-label">Читать</span>
+  <button class="tabbar-btn" data-tab="my" aria-label="Профиль">
+    <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.7"/><path d="M4 21a8 8 0 0 1 16 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    <span class="tabbar-label">Профиль</span>
   </button>
-  <button class="tabbar-btn" data-tab="offline" aria-label="Офлайн">
-    <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 16v4h14v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    <span class="tabbar-label">Офлайн</span>
+  <button class="tabbar-btn" data-tab="offline" aria-label="Больше">
+    <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.3" stroke="currentColor" stroke-width="1.7"/><rect x="14" y="3" width="7" height="7" rx="1.3" stroke="currentColor" stroke-width="1.7"/><rect x="3" y="14" width="7" height="7" rx="1.3" stroke="currentColor" stroke-width="1.7"/><rect x="14" y="14" width="7" height="7" rx="1.3" stroke="currentColor" stroke-width="1.7"/></svg>
+    <span class="tabbar-label">Больше</span>
   </button>
 </nav>
 
