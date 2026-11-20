@@ -80,12 +80,17 @@ async function proxy(req, res, target) {
   if (!ALLOWED.has(u.hostname)) return json(res, 403, { error: 'host not allowed', host: u.hostname });
 
   let html = null;
-  try {
-    const r = await grab(u.href);
-    const buf = Buffer.from(await r.arrayBuffer());
-    const body = decodeBody(buf, r.headers.get('content-type'));
-    if (r.status === 200 && !blocked(body)) html = body;
-  } catch { /* уходим в резервный шлюз */ }
+  // Две попытки к источнику: он периодически отвечает ошибкой под нагрузкой
+  // (например, когда пользователь слушает аудио и параллельно листает каталог).
+  for (let attempt = 0; attempt < 2 && html === null; attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, 600));
+    try {
+      const r = await grab(u.href);
+      const buf = Buffer.from(await r.arrayBuffer());
+      const body = decodeBody(buf, r.headers.get('content-type'));
+      if (r.status === 200 && !blocked(body)) html = body;
+    } catch { /* следующая попытка или резервный шлюз */ }
+  }
 
   if (html === null) {
     try {

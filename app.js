@@ -69,6 +69,14 @@ const store = {
       return raw.d;
     } catch { return null; }
   },
+  // Данные из кэша независимо от срока хранения — выручает, когда источник
+  // недоступен (нет сети или источник нас ограничил).
+  getStale(key) {
+    try {
+      const raw = JSON.parse(localStorage.getItem('polka:' + key));
+      return raw ? raw.d : null;
+    } catch { return null; }
+  },
   set(key, data, ttl) {
     try { localStorage.setItem('polka:' + key, JSON.stringify({ e: Date.now() + ttl, d: data })); }
     catch {
@@ -112,11 +120,21 @@ async function fetchText(url) {
 
   const job = (async () => {
     const target = GATE(url);
-    // Основной запрос с заголовком формата; при сбое preflight — повтор без него.
-    let r = await fetch(target, { headers: { 'X-Return-Format': 'html' } }).catch(() => null);
-    if (!r || !r.ok) r = await fetch(target);
-    if (!r.ok) throw new Error(r.status === 429 ? 'limit' : 'net' + r.status);
-    return r.text();
+    let last = null;
+    // До трёх попыток: источник иногда отвечает ошибкой / не успевает,
+    // особенно когда параллельно идёт воспроизведение аудио.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt) await sleep(500 * attempt);
+      try {
+        // Основной запрос с заголовком формата; при сбое preflight — повтор без него.
+        let r = await fetch(target, { headers: { 'X-Return-Format': 'html' } });
+        if (!r.ok) r = await fetch(target);
+        if (r.ok) return r.text();
+        last = new Error(r.status === 429 ? 'limit' : 'net' + r.status);
+        if (r.status === 429) break;   // превышен лимит — мгновенный повтор только навредит
+      } catch { last = new Error('net'); }
+    }
+    throw last || new Error('net');
   })();
 
   inflight.set(url, job);
@@ -332,97 +350,94 @@ function parseLrPage(html) {
 
 /* ---------- 7. API ---------- */
 
-async function apiList(cat, page = 1) {
-  const key = `list:${cat}:${page}`;
+/* Загрузка с кэшем: свежие данные не запрашиваем повторно, а если источник
+   недоступен — отдаём то, что уже сохранили, вместо экрана ошибки. */
+async function cached(key, ttl, loader, valid) {
   const hit = store.get(key);
   if (hit) return hit;
-  const url = `${SRC.list}/${cat}/${page > 1 ? '?page=' + page : ''}`;
-  const data = parseListing(await fetchText(url));
-  if (data.items.length) store.set(key, data, TTL.list);
-  return data;
+  const stale = store.getStale(key);
+  try {
+    const data = await loader();
+    if (!valid || valid(data)) { store.set(key, data, ttl); return data; }
+    // Ответ не похож на настоящую страницу (заглушка источника) — берём сохранённую копию.
+    return stale || data;
+  } catch (e) {
+    if (stale) return stale;
+    throw e;
+  }
 }
 
-async function apiGenres() {
-  const hit = store.get('genres');
-  if (hit) return hit;
-  const data = parseGenres(await fetchText(`${SRC.list}/genres/`));
-  if (data.length) store.set('genres', data, TTL.genres);
-  return data;
-}
+const apiList = (cat, page = 1) =>
+  cached(
+    `list:${cat}:${page}`, TTL.list,
+    async () => parseListing(await fetchText(`${SRC.list}/${cat}/${page > 1 ? '?page=' + page : ''}`)),
+    d => d.items.length
+  );
 
-async function apiGenre(slug, page = 1) {
-  const key = `genre:${slug}:${page}`;
-  const hit = store.get(key);
-  if (hit) return hit;
-  const url = `${SRC.list}/genre/${slug}/${page > 1 ? '?page=' + page : ''}`;
-  const data = parseListing(await fetchText(url));
-  if (data.items.length) store.set(key, data, TTL.list);
-  return data;
-}
+const apiGenres = () =>
+  cached(
+    'genres', TTL.genres,
+    async () => parseGenres(await fetchText(`${SRC.list}/genres/`)),
+    d => d.length
+  );
 
-async function apiSearch(query, page = 1) {
-  const key = `search:${query}:${page}`;
-  const hit = store.get(key);
-  if (hit) return hit;
-  const url = `${SRC.list}/search/?q=${encodeURIComponent(query)}${page > 1 ? '&page=' + page : ''}`;
-  const data = parseListing(await fetchText(url));
-  if (data.items.length) store.set(key, data, TTL.search);
-  return data;
-}
+const apiGenre = (slug, page = 1) =>
+  cached(
+    `genre:${slug}:${page}`, TTL.list,
+    async () => parseListing(await fetchText(`${SRC.list}/genre/${slug}/${page > 1 ? '?page=' + page : ''}`)),
+    d => d.items.length
+  );
+
+const apiSearch = (query, page = 1) =>
+  cached(
+    `search:${query}:${page}`, TTL.search,
+    async () => parseListing(await fetchText(`${SRC.list}/search/?q=${encodeURIComponent(query)}${page > 1 ? '&page=' + page : ''}`)),
+    d => d.items.length
+  );
 
 async function apiBook(slug) {
-  const key = `book:${slug}`;
+  const key = 'book:' + slug;
   const hit = store.get(key);
   if (hit) return hit;
-  const data = parseBook(await fetchText(`${SRC.book}/book/${slug}/`), { slug });
-  if (data.title && data.chapters.length) store.set(key, data, TTL.book);
-  return data;
+  const backup = () => store.getStale(key) || dl.offlineBook(slug);
+  try {
+    const data = parseBook(await fetchText(`${SRC.book}/book/${slug}/`), { slug });
+    if (data.title && data.chapters.length) { store.set(key, data, TTL.book); return data; }
+    return backup() || data;
+  } catch (e) {
+    // Источник недоступен — берём сохранённую копию или скачанную для офлайна книгу.
+    const saved = backup();
+    if (saved) return saved;
+    throw e;
+  }
 }
 
-const errorText = e =>
-  e && e.message === 'limit'
-    ? 'Источник ограничивает частоту запросов. Подождите минуту.'
-    : 'Не удалось загрузить данные. Проверьте подключение.';
+const errorText = e => {
+  if (navigator.onLine === false) return 'Нет подключения к интернету. Скачанные книги — во вкладке «Офлайн».';
+  if (e && e.message === 'limit') return 'Источник ограничивает частоту запросов. Подождите минуту.';
+  return 'Не удалось загрузить данные. Проверьте подключение.';
+};
 
 /* --- LoveRead: читабельные книги --- */
 
-async function apiLrList(page = 1) {
+const apiLrList = (page = 1) => {
   // Свежие поступления отдаются только на главной loveread.ec; пагинации у списка нет.
-  if (page > 1) return [];
-  const key = 'lr:list:1';
-  const hit = store.get(key);
-  if (hit) return hit;
-  const data = parseLrList(await fetchText(SRC_READ + '/'));
-  if (data.length) store.set(key, data, TTL.lr);
-  return data;
-}
+  if (page > 1) return Promise.resolve([]);
+  return cached('lr:list:1', TTL.lr, async () => parseLrList(await fetchText(SRC_READ + '/')), d => d.length);
+};
 
-async function apiLrGenres() {
-  const hit = store.get('lr:genres');
-  if (hit) return hit;
-  const data = parseLrGenres(await fetchText(SRC_READ + '/'));
-  if (data.length) store.set('lr:genres', data, TTL.genres);
-  return data;
-}
+const apiLrGenres = () =>
+  cached('lr:genres', TTL.genres, async () => parseLrGenres(await fetchText(SRC_READ + '/')), d => d.length);
 
-async function apiLrGenre(id, page = 1) {
-  const key = `lr:genre:${id}:${page}`;
-  const hit = store.get(key);
-  if (hit) return hit;
-  const url = `${SRC_READ}/genre.php?genre=${id}${page > 1 ? '&page=' + page : ''}`;
-  const data = parseLrList(await fetchText(url));
-  if (data.length) store.set(key, data, TTL.lr);
-  return data;
-}
+const apiLrGenre = (id, page = 1) =>
+  cached(
+    `lr:genre:${id}:${page}`, TTL.lr,
+    async () => parseLrList(await fetchText(`${SRC_READ}/genre.php?genre=${id}${page > 1 ? '&page=' + page : ''}`)),
+    d => d.length
+  );
 
-async function apiLrDetail(id) {
-  const key = `lr:book:${id}`;
-  const hit = store.get(key);
-  if (hit) return hit;
-  const data = parseLrDetail(await fetchText(`${SRC_READ}/book-comments.php?book=${id}`));
-  if (data.title) store.set(key, data, TTL.lrbook);
-  return data;
-}
+const apiLrDetail = (id) =>
+  cached('lr:book:' + id, TTL.lrbook, async () => parseLrDetail(await fetchText(`${SRC_READ}/book-comments.php?book=${id}`)), d => d.title);
 
 async function apiLrPage(id, page = 1) {
   const key = `lr:page:${id}:${page}`;
@@ -433,9 +448,15 @@ async function apiLrPage(id, page = 1) {
     const data = parseLrPage(off);
     if (data.blocks.length) { store.set(key, data, TTL.lrpage); return data; }
   }
-  const data = parseLrPage(await fetchText(`${SRC_READ}/read_book.php?id=${id}&p=${page}`));
-  if (data.blocks.length) store.set(key, data, TTL.lrpage);
-  return data;
+  try {
+    const data = parseLrPage(await fetchText(`${SRC_READ}/read_book.php?id=${id}&p=${page}`));
+    if (data.blocks.length) store.set(key, data, TTL.lrpage);
+    return data;
+  } catch (e) {
+    const stale = store.getStale(key);
+    if (stale) return stale;
+    throw e;
+  }
 }
 
 /* ---------- 7½. Менеджер загрузок (офлайн) ---------- */
@@ -462,6 +483,28 @@ const dl = {
 
   busy() { return !!this.task; },
   meta(id) { return store.get('dl:' + id) || null; },
+  // Книга, сохранённая вместе с загрузкой — из неё собирается вкладка «Офлайн».
+  offlineBook(id) { const m = store.getStale('dl:' + id); return (m && m.book) || null; },
+  // Все скачанные аудиокниги (для вкладки «Офлайн»).
+  offlineList() {
+    return Object.keys(localStorage)
+      .filter(k => k.startsWith('polka:dl:'))
+      .map(k => {
+        const id = k.slice('polka:dl:'.length);
+        if (id.startsWith('r')) return null;                       // это читалка, не аудио
+        const m = store.getStale('dl:' + id);
+        if (!m || m.status !== 'done') return null;
+        const b = m.book || store.getStale('book:' + id);
+        if (!b || !b.title) return null;
+        return {
+          ...b,
+          slug: b.slug || id,
+          author: b.author || (b.authors && b.authors[0]) || '',
+          reader: b.reader || (b.readers && b.readers[0]) || '',
+        };
+      })
+      .filter(Boolean);
+  },
 
   async audio(book) {
     if (this.busy()) return toast('Уже идёт другая загрузка');
@@ -483,10 +526,10 @@ const dl = {
         this.paint();
       }
       const status = t.cancel ? 'paused' : 'done';
-      store.set('dl:' + t.id, { status, total, done: t.done }, 365 * 24 * 3600e3);
+      store.set('dl:' + t.id, { status, total, done: t.done, title: t.title, book }, 365 * 24 * 3600e3);
       toast(status === 'done' ? 'Готово — можно слушать без сети' : 'Загрузка остановлена');
     } catch {
-      store.set('dl:' + t.id, { status: 'paused', total, done: t.done }, 365 * 24 * 3600e3);
+      store.set('dl:' + t.id, { status: 'paused', total, done: t.done, title: t.title, book }, 365 * 24 * 3600e3);
       toast('Загрузка не удалась — возможно, мало места');
     } finally { this.task = null; this.paint(); }
   },
@@ -617,7 +660,7 @@ function route() {
   $('#search-bar').classList.toggle('is-hidden', !searching);
   markTab(head, parts[1]);
 
-  if (head === 'cat') return renderCatalog(parts[1] || 'new');
+  if (head === 'cat') return parts[1] === 'offline' ? renderOffline() : renderCatalog(parts[1] || 'new');
   if (head === 'genres') return renderGenres();
   if (head === 'genre') return renderGenre(parts[1], parts[2] || '');
   if (head === 'search') return openSearch(q.get('q') || '');
@@ -787,6 +830,30 @@ async function renderCatalog(cat) {
     view.innerHTML = stateHTML('Ошибка', errorText(e), { label: 'Повторить' });
     $('#state-action').onclick = () => renderCatalog(cat);
   }
+}
+
+/* ---------- 10.5 Слушать офлайн ---------- */
+/* Показываем только книги, целиком скачанные для прослушивания без интернета. */
+
+function renderOffline() {
+  ++state.seq;                 // отменяем незавершённые загрузки предыдущего экрана
+  state.cat = 'offline';
+  state.back = 'cat/offline';
+  state.items = [];
+  state.ended = true;          // вкладка без пагинации
+  state.loading = false;
+  clearTail();
+  const list = dl.offlineList();
+  if (!list.length) {
+    view.innerHTML = stateHTML(
+      'Пока пусто',
+      'Откройте аудиокнигу и нажмите «Скачать для офлайна» — она появится здесь и будет доступна без интернета.'
+    );
+    return;
+  }
+  view.innerHTML = `<div class="section-title">Слушать офлайн</div>
+    <div class="grid">${list.map(cardHTML).join('')}</div>`;
+  syncPlaying();
 }
 
 /* ---------- 11. Жанры ---------- */
