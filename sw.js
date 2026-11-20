@@ -1,8 +1,12 @@
 /* Оболочка приложения в офлайн-кэше. Данные каталога кэшируются в localStorage.
    Стратегия: документ и код (js/css) — сеть-первым, чтобы обновления доезжали сразу;
    остальное — из кэша с фоновым обновлением. */
-const CACHE = 'polka-shell-v15';
-const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'icon.svg', 'manifest.webmanifest'];
+const CACHE = 'polka-shell-v19';
+const SHELL = [
+  './', 'index.html', 'styles.css', 'app.js', 'icon.svg', 'manifest.webmanifest',
+  'assets/images/home-hero.jpg', 'assets/images/reader-castle.jpg',
+  'assets/images/bookify-logo.jpg', 'assets/images/card-audio-cartoon.jpg', 'assets/images/card-reader-cartoon.jpg'
+];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

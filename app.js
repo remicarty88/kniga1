@@ -700,12 +700,13 @@ function route() {
   const head = parts[0] || 'cat';
   state.route = head + '/' + (parts[1] || '');
   window.scrollTo(0, 0);
-  document.title = 'Полка';
+  document.title = 'Bookify';
   disconnectObserver();
 
   const searching = head === 'search';
   const detail = head === 'book' || head === 'rbook' || head === 'rread';
   const reader = head === 'rread';
+  const home = head === 'cat' && (parts[1] || 'new') === 'new';
   const offline = document.body.classList.contains('is-offline');
   const isCat = head === 'cat' || head === 'genres' || head === 'genre';
   // На «Мои книги» и «Библиотеку» режим не переключаем — там и аудио, и тексты.
@@ -713,8 +714,9 @@ function route() {
   rdPage(reader);   // тема страницы — только в читалке
   // В читалке не должно быть ничего лишнего: только текст и кнопка настроек.
   document.body.classList.toggle('is-reader', reader);
+  document.body.classList.toggle('is-home', home);
   $('#topbar').classList.toggle('is-hidden', reader);
-  $('#headbar').classList.toggle('is-hidden', detail || reader || offline || !(isCat || searching));
+  $('#headbar').classList.toggle('is-hidden', detail || reader || offline || home || !(isCat || searching));
   $('#tabbar').classList.toggle('is-hidden', detail || reader);
   $('#chips').classList.toggle('is-hidden', searching);
   $('#search-bar').classList.toggle('is-hidden', !searching);
@@ -898,6 +900,111 @@ function bindContinueRead() {
   });
 }
 
+const homeCardHTML = (b, i) => `
+  <a class="home-book" style="--i:${i}" href="#/book/${esc(b.slug)}" aria-label="${esc(b.title)}">
+    <div class="home-book-cover">
+      ${b.cover ? `<img src="${esc(coverImg(b.cover))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}
+      ${i < 2 ? `<span class="home-book-badge">${i === 0 ? 'Популярное' : 'Выбор читателей'}</span>` : ''}
+      <span class="home-book-open">${playIcon}</span>
+    </div>
+    <span class="home-book-title">${esc(b.title)}</span>
+    <span class="home-book-author">${esc(b.author || b.reader || '')}</span>
+    ${b.time ? `<span class="home-book-time">${clockIcon}${esc(b.time)}</span>` : ''}
+  </a>`;
+
+function homeShellHTML() {
+  const featureIcon = (d) => `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">${d}</svg>`;
+  return `
+    <section class="home-hero">
+      <div class="home-hero-image"></div>
+      <div class="home-hero-copy">
+        <span class="home-kicker">BOOKIFY · ТВОЯ БИБЛИОТЕКА</span>
+        <h1>Твой мир<br>в книгах</h1>
+        <p>Книги и аудиокниги<br>в одном приложении</p>
+        <button class="home-cta" id="home-start">Начать читать <span>›</span></button>
+      </div>
+    </section>
+    <div class="home-stats" aria-label="Возможности Bookify">
+      <button data-home="catalog">${featureIcon('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15.5H6.5A2.5 2.5 0 0 0 4 21z" fill="currentColor"/><path d="M9 7v7" stroke="#fff" stroke-width="1.5"/>')}<b>Книги</b><small>большой выбор</small></button>
+      <button data-home="listen">${featureIcon('<path d="M3 13v-1a9 9 0 0 1 18 0v1M3 13h3v6H5a2 2 0 0 1-2-2zm18 0h-3v6h1a2 2 0 0 0 2-2z" fill="currentColor"/>')}<b>Аудиокниги</b><small>слушай везде</small></button>
+      <button data-home="read">${featureIcon('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v17H6.5A2.5 2.5 0 0 0 4 22zM20 5.5A2.5 2.5 0 0 0 17.5 3H13v17h4.5a2.5 2.5 0 0 1 2.5 2z" fill="currentColor"/>')}<b>Читалка</b><small>удобный формат</small></button>
+      <button data-home="offline">${featureIcon('<path d="M12 3v11m0 0-4-4m4 4 4-4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>')}<b>Офлайн</b><small>читай без сети</small></button>
+    </div>
+    <section class="home-section">
+      <div class="home-section-head"><h2><i>🔥</i> Популярное сегодня</h2><button data-home="popular">Все <span>→</span></button></div>
+      <div class="home-books" id="home-books">${Array.from({ length: 4 }, () => '<div class="home-book-skeleton"><i></i><b></b><small></small></div>').join('')}</div>
+    </section>
+    <section class="home-features">
+      <button class="home-feature home-feature-audio" data-home="listen">
+        <img class="feature-art" src="assets/images/card-audio-cartoon.jpg" alt="" />
+        <span class="feature-tag">СЛУШАТЬ</span><b>Аудиокниги</b><small>Истории, которые<br>всегда с тобой</small><span class="feature-link">Слушать <i>→</i></span>
+      </button>
+      <button class="home-feature home-feature-reader" data-home="read">
+        <img class="feature-art" src="assets/images/card-reader-cartoon.jpg" alt="" />
+        <span class="feature-tag">ЧИТАТЬ</span><b>Читалка</b><small>Тихое место<br>для новых историй</small><span class="feature-link">Открыть <i>→</i></span>
+      </button>
+    </section>
+    <section class="home-section home-recommend">
+      <div class="home-section-head"><h2><i>⭐</i> Рекомендации для вас</h2><button data-home="genres">Все <span>→</span></button></div>
+      <div class="home-genres">
+        <button class="is-active" data-home="genres"><span>✧</span>Фантастика</button>
+        <button data-home="genres"><span>⌕</span>Детективы</button>
+        <button data-home="genres"><span>♡</span>Романы</button>
+        <button data-home="genres"><span>▤</span>Бизнес</button>
+        <button data-home="genres"><span>❋</span>Саморазвитие</button>
+        <button data-home="genres"><span>⌂</span>История</button>
+      </div>
+    </section>
+    <div class="home-extra">${continueListenHTML()}${continueReadHTML('Продолжить чтение', 2)}</div>`;
+}
+
+function bindHome() {
+  $('#home-start')?.addEventListener('click', () => { applyMode('read'); go('read'); });
+  $$('[data-home]').forEach(btn => btn.addEventListener('click', () => {
+    const action = btn.dataset.home;
+    if (action === 'listen' || action === 'popular') { applyMode('listen'); go('cat/popular'); }
+    else if (action === 'read') { applyMode('read'); go('read'); }
+    else if (action === 'offline') go('cat/offline');
+    else if (action === 'genres') { applyMode('listen'); go('genres'); }
+    else go('cat/new');
+  }));
+  const cl = $('#cont-listen');
+  if (cl) cl.onclick = () => {
+    if (player.book) return openSheet();
+    if (loadLast({ autoplay: true })) openSheet();
+  };
+  bindContinueRead();
+}
+
+async function renderHome(seq) {
+  state.cat = 'new';
+  state.back = 'cat/new';
+  state.items = [];
+  state.page = 1;
+  state.ended = true;
+  state.loading = false;
+  view.innerHTML = homeShellHTML();
+  clearTail();
+  bindHome();
+  try {
+    const [popular, fresh] = await Promise.all([
+      apiList('popular', 1).catch(() => ({ items: [] })),
+      apiList('new', 1).catch(() => ({ items: [] })),
+    ]);
+    if (seq !== state.seq) return;
+    const items = (popular.items.length ? popular.items : fresh.items).slice(0, 8);
+    const books = $('#home-books');
+    if (books) books.innerHTML = items.length
+      ? items.map(homeCardHTML).join('')
+      : '<div class="home-empty">Подборка появится, когда каталог будет доступен.</div>';
+    state.items = items;
+    restoreScroll(state.route);
+  } catch {
+    const books = $('#home-books');
+    if (books) books.innerHTML = '<div class="home-empty">Не удалось загрузить подборку.</div>';
+  }
+}
+
 /* ---------- 10. Каталог ---------- */
 
 async function renderCatalog(cat) {
@@ -908,6 +1015,7 @@ async function renderCatalog(cat) {
   state.page = 1;
   state.ended = false;
   state.loading = false;
+  if (cat === 'new') return renderHome(seq);
   view.innerHTML = skeletonHTML();
   clearTail();
   try {
@@ -1120,7 +1228,8 @@ async function renderGenre(slug, name) {
 
 /* ---------- 12. Поиск ---------- */
 
-const backIcon = '<svg viewBox="0 0 24 24" fill="none"><path d="M16.2426 6.34317L14.8284 4.92896L7.75739 12L14.8285 19.0711L16.2427 17.6569L10.5858 12L16.2426 6.34317Z" fill="currentColor"/></svg>';
+// Local SVGs from css.gg (MIT): https://github.com/astrit/css.gg
+const backIcon = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20.3284 11.0001V13.0001L7.50011 13.0001L10.7426 16.2426L9.32842 17.6568L3.67157 12L9.32842 6.34314L10.7426 7.75735L7.49988 11.0001L20.3284 11.0001Z" fill="currentColor"/></svg>';
 
 /* Кнопка очистки видна, только когда в поле есть текст */
 function syncClear() {
@@ -1600,6 +1709,7 @@ async function renderReadBook(id) {
     const b = await apiLrDetail(id);
     if (seq !== state.seq) return;
     if (!b.title) { view.innerHTML = stateHTML('Не найдено', 'Книга недоступна.'); return; }
+    store.set('lr:meta:' + id, { title: b.title, author: b.author, cover: b.cover }, 365 * 24 * 3600e3);
     const pos = store.get('lr:pos:' + id);
     const page = pos && pos.p > 1 ? pos.p : 1;
     view.innerHTML = `${back}
@@ -1647,7 +1757,7 @@ async function renderReadBook(id) {
 /* ---------- Настройки чтения (сохраняются) ---------- */
 
 const RD_W = { narrow: 54, medium: 66, wide: 80 };
-const RD_DEF = { scale: 1, lh: 1.7, width: 'medium', font: 'sans', theme: 'auto' };
+const RD_DEF = { scale: 1, lh: 1.7, width: 'medium', spacing: 'normal', font: 'serif', theme: 'dark', brightness: 1, orientation: 'portrait' };
 
 const rdSet = (() => {
   let saved = {};
@@ -1667,6 +1777,7 @@ function rdApply() {
   st.setProperty('--rd', rdSet.scale);
   st.setProperty('--rd-lh', rdSet.lh);
   st.setProperty('--rd-w', (RD_W[rdSet.width] || RD_W.medium) + 'ch');
+  st.setProperty('--rd-brightness', rdSet.brightness || 1);
   $$('.reader').forEach(r => r.classList.toggle('rd-serif', rdSet.font === 'serif'));
 }
 
@@ -1695,7 +1806,7 @@ function readerExcerpt() {
   return p ? p.textContent.trim().slice(0, 90) : '';
 }
 
-const bmIcon = '<svg viewBox="0 0 24 24" fill="none" width="14" height="14"><path d="M7 3h10a1 1 0 0 1 1 1v17l-6-4.2L6 21V4a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
+const bmIcon = '<svg viewBox="0 0 24 24" fill="none" width="14" height="14" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M19 20h-1.8283l-4.4645-4.4646a1 1 0 0 0-1.4143 0L6.8284 20H5V7a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v13ZM17 7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v10l2.8787-2.8788a3 3 0 0 1 4.2427 0L17 17V7Z" fill="currentColor"/></svg>';
 
 // Закладки: { p — лист источника, c — экран внутри листа, excerpt, ts }.
 // Старый формат { page, y } тоже читаем.
@@ -1769,41 +1880,57 @@ function rdPanelHTML() {
   }</div>`;
   const pct = Math.round(rdSet.scale * 100);
   return `<div class="rd-panel is-hidden" id="rd-panel">
+    <div class="rd-panel-grab"></div>
     <div class="rd-panel-head">
-      <span class="rd-panel-title">Читалка</span>
+      <span class="rd-panel-title">Настройки чтения</span>
       <span class="rd-count" id="rd-page"></span>
       <button class="rd-close" id="rd-panel-close" aria-label="Закрыть">${rdCloseIcon}</button>
     </div>
-    <div class="rd-row">
-      <span class="rd-row-name">Размер</span>
-      <input type="range" id="rd-scale" min="80" max="160" step="5" value="${pct}" aria-label="Размер текста">
-      <span class="rd-val" id="rd-scale-val">${pct}%</span>
+    <div class="rd-theme-swatches" data-seg="theme">
+      ${[['dark','Aa'],['light','Aa'],['sepia','Aa'],['auto','Aa']].map(([v,t]) => `<button data-v="${v}" class="rd-theme-tile rd-theme-${v}${rdSet.theme === v ? ' on' : ''}" aria-label="${v === 'dark' ? 'Тёмная тема' : v === 'light' ? 'Светлая тема' : v === 'sepia' ? 'Сепия' : 'Тема устройства'}">${t}</button>`).join('')}
     </div>
-    <div class="rd-row">
-      <span class="rd-row-name">Интервал</span>
-      <input type="range" id="rd-lh" min="1.4" max="2.2" step="0.05" value="${rdSet.lh}" aria-label="Межстрочный интервал">
-      <span class="rd-val" id="rd-lh-val">${rdSet.lh.toFixed(2)}</span>
+    <div class="rd-setting-line">
+      <span>Шрифт</span>
+      ${seg('font', [['serif', 'Georgia'], ['sans', 'Системный']])}
+      <button class="rd-size-button" id="rd-smaller" aria-label="Уменьшить шрифт">A−</button>
+      <button class="rd-size-button" id="rd-larger" aria-label="Увеличить шрифт">A+</button>
     </div>
-    <div class="rd-row rd-row-col">
-      <span class="rd-row-name">Ширина колонки</span>
-      ${seg('width', [['narrow', 'Узкая'], ['medium', 'Средняя'], ['wide', 'Широкая']])}
+    <input class="rd-range-hidden" type="range" id="rd-scale" min="80" max="160" step="5" value="${pct}" aria-label="Размер текста">
+    <span class="rd-val is-hidden" id="rd-scale-val">${pct}%</span>
+    <div class="rd-setting-line rd-spacing-line">
+      <span>Интервал</span>
+      ${seg('spacing', [['compact', '≡'], ['normal', '≋'], ['relaxed', '☰']])}
     </div>
-    <div class="rd-row rd-row-col">
-      <span class="rd-row-name">Шрифт</span>
-      ${seg('font', [['sans', 'Без засечек'], ['serif', 'С засечками']])}
+    <input class="rd-range-hidden" type="range" id="rd-lh" min="1.4" max="2.2" step="0.05" value="${rdSet.lh}" aria-label="Межстрочный интервал">
+    <span class="rd-val is-hidden" id="rd-lh-val">${rdSet.lh.toFixed(2)}</span>
+    <div class="rd-setting-line rd-spacing-line">
+      <span>Поля</span>
+      ${seg('width', [['narrow', '≡'], ['medium', '≋'], ['wide', '☰']])}
     </div>
-    <div class="rd-row rd-row-col">
-      <span class="rd-row-name">Тема страницы</span>
-      ${seg('theme', [['auto', 'Авто'], ['sepia', 'Сепия'], ['light', 'Светлая'], ['dark', 'Тёмная']])}
+    <div class="rd-reader-extra">
+      <label class="rd-brightness">
+        <span class="rd-sun">☼</span><span>Яркость</span>
+        <input type="range" id="rd-brightness" min="60" max="120" step="5" value="${Math.round((rdSet.brightness || 1) * 100)}" aria-label="Яркость страницы">
+        <b id="rd-brightness-val">${Math.round((rdSet.brightness || 1) * 100)}%</b>
+      </label>
+      <div class="rd-orientation">
+        <span>Ориентация</span>
+        ${seg('orientation', [['portrait', '▯'], ['landscape', '▭']])}
+      </div>
     </div>
-    <div class="rd-sec">
+    <div class="rd-shortcuts">
+      <button id="rd-shortcut-bm">${bmIcon}<span>Закладки</span></button>
+      <button id="rd-shortcut-note"><span class="rd-note-icon">↗</span><span>Заметки</span></button>
+      <button id="rd-shortcut-exit"><span class="rd-exit-icon">⌂</span><span>Закрыть</span></button>
+    </div>
+    <div class="rd-sec" id="rd-sec-bookmarks">
       <div class="rd-sec-head">
         <span class="rd-sec-name">Закладки</span>
         <button class="rd-mini" id="rd-bm">${bmIcon}<span>Добавить</span><span id="bm-count"></span></button>
       </div>
       <div class="bm-list is-empty" id="bm-list"></div>
     </div>
-    <div class="rd-sec">
+    <div class="rd-sec" id="rd-sec-notes">
       <div class="rd-sec-head">
         <span class="rd-sec-name">Заметки</span>
         <span class="rd-sec-num" id="nm-count"></span>
@@ -1828,6 +1955,16 @@ function openRdPanel(on) {
 function wireRdPanel(id) {
   $('#rd-aa').onclick = () => openRdPanel(!rdPanelOpen);
   $('#rd-panel-close').onclick = () => openRdPanel(false);
+  $('#rd-smaller').onclick = () => {
+    const input = $('#rd-scale');
+    input.value = Math.max(Number(input.min), Number(input.value) - Number(input.step));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  $('#rd-larger').onclick = () => {
+    const input = $('#rd-scale');
+    input.value = Math.min(Number(input.max), Number(input.value) + Number(input.step));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
   $('#rd-scale').oninput = e => {
     rdSet.scale = Number(e.target.value) / 100;
     $('#rd-scale-val').textContent = e.target.value + '%';
@@ -1844,14 +1981,35 @@ function wireRdPanel(id) {
   };
   $$('#rd-panel [data-seg]').forEach(box => {
     box.querySelectorAll('button').forEach(btn => btn.onclick = () => {
-      rdSet[box.dataset.seg] = btn.dataset.v;
+      const key = box.dataset.seg;
+      rdSet[key] = btn.dataset.v;
+      if (key === 'spacing') {
+        rdSet.lh = ({ compact: 1.5, normal: 1.7, relaxed: 1.95 })[btn.dataset.v];
+        $('#rd-lh').value = rdSet.lh;
+        $('#rd-lh-val').textContent = rdSet.lh.toFixed(2);
+      }
       box.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === btn));
-      if (box.dataset.seg === 'theme') rdPage(true);
+      if (key === 'theme') rdPage(true);
       rdApply();
       rdRelayout(true);
       rdSave();
+      if (key === 'orientation' && screen.orientation?.lock) {
+        screen.orientation.lock(btn.dataset.v).catch(() => toast('Поворот зависит от настроек устройства'));
+      }
     });
   });
+  $('#rd-brightness').oninput = e => {
+    rdSet.brightness = Number(e.target.value) / 100;
+    $('#rd-brightness-val').textContent = e.target.value + '%';
+    rdApply();
+    rdSave();
+  };
+  $('#rd-shortcut-bm').onclick = () => $('#rd-sec-bookmarks').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#rd-shortcut-note').onclick = () => {
+    $('#rd-sec-notes').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('#nm-text').focus();
+  };
+  $('#rd-shortcut-exit').onclick = () => go('rbook/' + id);
   // Закладка на текущем экране
   $('#rd-bm').onclick = () => {
     const page = rdView.src, col = rdView.si;
@@ -1877,6 +2035,7 @@ function wireRdPanel(id) {
     renderNm(id, page);
   };
   $('#rd-exit').onclick = () => go('rbook/' + id);
+  $('#rd-back').onclick = () => go('rbook/' + id);
   openRdPanel(rdPanelOpen);
 }
 
@@ -1887,6 +2046,13 @@ function wireRdPanel(id) {
 const RD_GAP = 48;                                  // px — совпадает с .rd-page{column-gap}
 
 const rdView = { id: null, src: 1, total: 1, si: 0, cols: 1, title: '', busy: false, cache: new Map() };
+
+let rdResizeTimer = 0;
+window.addEventListener('resize', () => {
+  if (!rdView.id || !rdStageEl()) return;
+  clearTimeout(rdResizeTimer);
+  rdResizeTimer = setTimeout(() => rdRelayout(true), 90);
+}, { passive: true });
 
 const rdKey = (id, p) => id + ':' + p;
 
@@ -1913,8 +2079,8 @@ const rdBodyHTML = d => d.blocks.map(b => b.t === 'h'
 const rdStageEl = () => $('#rd-stage');
 const rdCurEl = () => $('#rd-cur');
 
-/* Шаг ленты: ширина колонки плюс отступ между колонками */
-const rdStride = () => (rdStageEl() ? rdStageEl().clientWidth : 0) + RD_GAP;
+/* Шаг должен совпадать с реальной шириной текстовой колонки, без полей stage. */
+const rdStride = () => (rdCurEl() ? rdCurEl().clientWidth : 0) + RD_GAP;
 
 /* Сдвигаем ленту к текущему экрану (плавность задана в CSS) */
 function rdPlace() {
@@ -1940,7 +2106,7 @@ function rdRelayout(preserve) {
   const stage = rdStageEl(), cur = rdCurEl();
   if (!stage || !cur) return;
   const frac = preserve && rdView.cols > 1 ? (rdView.si + 1) / rdView.cols : null;
-  const w = Math.max(1, Math.round(stage.clientWidth));
+  const w = Math.max(1, Math.round(cur.clientWidth));
   stage.style.setProperty('--rd-colw', w + 'px');
   stage.style.setProperty('--rd-gap', RD_GAP + 'px');
   const stride = w + RD_GAP;
@@ -1978,7 +2144,9 @@ function rdShowSrc(d) {
   if (!cur) return;
   rdView.src = d.page;
   rdView.total = d.total;
-  if (d.title) { rdView.title = d.title; document.title = d.title + ' — Полка'; }
+  if (d.title) { rdView.title = d.title; document.title = d.title + ' — Bookify'; }
+  const pageLabel = $('.rd-book-heading > span');
+  if (pageLabel) pageLabel.textContent = 'СТРАНИЦА ' + d.page;
   cur.innerHTML = rdBodyHTML(d);
   rdRelayout(false);
   rdPrefetch();
@@ -2081,13 +2249,28 @@ async function renderReader(id, page) {
   try {
     const d = await apiLrPage(id, page);
     if (seq !== state.seq) return;
-    // В книге — только текст, тонкая полоса прогресса и кнопка настроек.
+    const meta = store.getStale('lr:meta:' + id) || {};
+    const title = meta.title || d.title || 'Книга';
+    // Книга и настройки остаются поверх страницы, перелистывание не меняется.
     view.innerHTML = `
-      <div class="rd-topline"><i id="rd-pct" style="width:0%"></i></div>
-      <button class="rd-fab is-away" id="rd-aa" aria-label="Настройки чтения" title="Настройки чтения">Aa</button>
-      ${rdPanelHTML()}
-      <div class="rd-stage" id="rd-stage"><article class="reader rd-page" id="rd-cur">${rdBodyHTML(d)}</article></div>`;
-    if (d.title) document.title = d.title + ' — Полка';
+      <div class="rd-reader-shell">
+        <div class="rd-reader-art"></div>
+        <div class="rd-topline"><i id="rd-pct" style="width:0%"></i></div>
+        <header class="rd-toolbar">
+          <button class="rd-toolbar-btn" id="rd-back" aria-label="Назад">${backIcon}</button>
+          ${meta.cover ? `<img class="rd-toolbar-cover" src="${esc(lrCover(meta.cover))}" alt="" referrerpolicy="no-referrer">` : ''}
+          <div class="rd-toolbar-book"><b>${esc(title)}</b><span>${esc(meta.author || '')}</span></div>
+        </header>
+        <div class="rd-book-heading">
+          <span>СТРАНИЦА ${Number(d.page) || 1}</span>
+          <i></i>
+          <h1>${esc(title)}</h1>
+        </div>
+        <div class="rd-stage" id="rd-stage"><article class="reader rd-page" id="rd-cur">${rdBodyHTML(d)}</article></div>
+        <button class="rd-fab is-away" id="rd-aa" aria-label="Настройки чтения" title="Настройки чтения">Aa</button>
+      </div>
+      ${rdPanelHTML()}`;
+    if (title) document.title = title + ' — Bookify';
     rdApply();
     rdPage(true);
     if (rdView.id !== id) { rdView.cache.clear(); rdView.id = id; }
@@ -2235,6 +2418,7 @@ const player = {
     $('#sheet-cover').src = coverImg(b.cover, 'full') || '';
     $('#sheet-title').textContent = b.title;
     $('#sheet-sub').textContent = sub;
+    $('#sheet-body').classList.toggle('has-chapters', b.chapters.length > 1);
     $('#sheet-amb').style.backgroundImage = b.cover ? `url("${coverImg(b.cover)}")` : 'none';
     $('#mini').classList.remove('is-hidden');
 
@@ -2449,6 +2633,11 @@ function bindUI() {
     else if (t === 'my') go('my');
     else if (t === 'lib') go('lib');
     else if (t === 'offline') go('cat/offline');
+    else if (t === 'player') {
+      if (player.book) return openSheet();
+      if (loadLast({ autoplay: true })) openSheet();
+      else toast('Выберите аудиокнигу для прослушивания');
+    }
   });
 
   // Стрелки ←/→ — листание экранов в читалке

@@ -1,7 +1,7 @@
 {
-  "name": "Полка — аудиокниги",
-  "short_name": "Полка",
-  "description": "Каталог аудиокниг: новинки, жанры, поиск и плеер.",
+  "name": "Bookify — книги и аудиокниги",
+  "short_name": "Bookify",
+  "description": "Читай, слушай и открывай новые книги.",
   "lang": "ru",
   "start_url": "./",
   "scope": "./",
@@ -10,6 +10,7 @@
   "background_color": "#000000",
   "theme_color": "#000000",
   "icons": [
+    { "src": "assets/images/bookify-logo.jpg", "sizes": "900x900", "type": "image/jpeg", "purpose": "any" },
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
   ]
