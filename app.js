@@ -614,7 +614,6 @@ const state = {
   scroll: {},
   book: null,
   seq: 0,            // токен актуальности рендера списка
-  rd: null,          // контекст читалки для стрелок клавиатуры { id, page, total }
 };
 
 let observer = null;
@@ -646,7 +645,6 @@ function route() {
   const { parts, q } = parseHash();
   const head = parts[0] || 'cat';
   state.route = head + '/' + (parts[1] || '');
-  state.rd = null;
   window.scrollTo(0, 0);
   document.title = 'Полка';
   disconnectObserver();
@@ -840,8 +838,9 @@ function bindContinueRead() {
   $$('.cont-card[data-id]').forEach(el => el.onclick = () => {
     const id = el.dataset.id;
     const pos = store.get('lr:pos:' + id) || {};
-    if (pos.y > 0 && pos.p === Number(el.dataset.p)) pendingScroll = { id, y: pos.y };
-    go(`rread/${id}/${Number(el.dataset.p) || 1}`);
+    const p = Number(el.dataset.p) || 1;
+    if (pos.c > 0 && pos.p === p) pendingSpot = { id, p, c: pos.c };
+    go(`rread/${id}/${p}`);
   });
 }
 
@@ -1045,6 +1044,102 @@ function syncClear() {
   if (inp && btn) btn.classList.toggle('is-hidden', !inp.value.trim());
 }
 
+/* Режим поиска: «audio» — аудиокниги, «read» — книги для чтения. */
+let searchMode = localStorage.getItem('polka:smode') === 'read' ? 'read' : 'audio';
+
+function paintSearchMode() {
+  $$('#search-modes .search-mode').forEach(b => b.classList.toggle('is-active', b.dataset.sm === searchMode));
+  const inp = $('#search-input');
+  if (inp) inp.placeholder = searchMode === 'read' ? 'Книга или автор' : 'Книга, автор или чтец';
+}
+
+function setSearchMode(m) {
+  if (m === searchMode) return;
+  searchMode = m;
+  try { localStorage.setItem('polka:smode', m); } catch {}
+  paintSearchMode();
+  const input = $('#search-input');
+  const q = ((input && input.value) || '').trim();
+  if (q.length >= 2) runSearch(q);
+  else view.innerHTML = stateHTML('Поиск', searchMode === 'read'
+    ? 'Введите название книги или автора — будем искать книги для чтения.'
+    : 'Введите название книги, автора или чтеца.');
+}
+
+/* --- Поиск книг для чтения: встроенный Google CSE источника LoveRead --- */
+/* Серверную выдачу источник не отдаёт, зато его же поиск (CSE) доступен
+   прямо в браузере. Запускаем его в скрытом блоке и превращаем найденные
+   ссылки в свои карточки. */
+
+const CSE_CX = 'c549cf6a3e4cc48c6';
+let csePromise = null;
+
+function cseElement() {
+  const api = window.google && google.search && google.search.cse && google.search.cse.element;
+  if (!api) return null;
+  if (api.getAllElements) {
+    const all = api.getAllElements();
+    for (const k in all) if (all[k]) return all[k];
+  }
+  return api.getElement('searchresults-only0') || null;
+}
+
+function loadCSE() {
+  if (csePromise) return csePromise;
+  csePromise = new Promise(resolve => {
+    const host = $('#cse-hidden');
+    if (!host) return resolve(null);
+    host.innerHTML = '<div class="gcse-searchresults-only"></div>';
+    let settled = false;
+    const done = () => { if (settled) return; settled = true; resolve(cseElement()); };
+    window.__polkaCseReady = done;
+    const s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://cse.google.com/cse.js?cx=' + CSE_CX + '&callback=__polkaCseReady';
+    s.onerror = () => { if (!settled) { settled = true; resolve(null); } };
+    document.head.appendChild(s);
+    setTimeout(done, 8000);                 // подстраховка, если callback не придёт
+  });
+  return csePromise;
+}
+
+// Достаём из выдачи ссылки на книги источника и превращаем их в список.
+function cseScrape() {
+  const host = $('#cse-hidden');
+  const out = [], seen = new Set();
+  if (!host) return out;
+  host.querySelectorAll('a.gs-title, .gs-title a').forEach(a => {
+    const href = a.getAttribute('href') || '';
+    const m = href.match(/(?:read_book\.php\?id=|contents\.php\?id=|book-comments\.php\?book=)(\d+)/);
+    if (!m) return;
+    const id = m[1];
+    if (seen.has(id)) return;
+    seen.add(id);
+    const block = a.closest('.gsc-webResult, .gsc-result, .gs-result') || a.parentElement;
+    const snippet = ((block && block.querySelector('.gs-snippet')?.textContent) || '').replace(/\s+/g, ' ').trim();
+    const title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+    if (title) out.push({ id, title, snippet });
+  });
+  return out;
+}
+
+async function cseSearch(q) {
+  const el = await loadCSE();
+  const host = $('#cse-hidden');
+  if (!el || !host) return null;
+  try { el.execute(q); } catch { return null; }
+  await new Promise(resolve => {                 // ждём, пока виджет отрисует выдачу
+    const t0 = Date.now();
+    let last = -1, stable = 0;
+    const tick = setInterval(() => {
+      const n = host.querySelectorAll('a.gs-title, .gs-title a').length;
+      if (n && n === last) stable++; else { stable = 0; last = n; }
+      if ((n && stable >= 2) || Date.now() - t0 > 9000) { clearInterval(tick); resolve(); }
+    }, 150);
+  });
+  return cseScrape();
+}
+
 async function openSearch(q) {
   const input = $('#search-input');
   if (document.activeElement !== input) input.value = q || '';
@@ -1054,7 +1149,35 @@ async function openSearch(q) {
     runSearch(q);
   } else if (document.activeElement !== input) {
     input.focus();
-    view.innerHTML = stateHTML('Поиск', 'Введите название книги, автора или чтеца.');
+    view.innerHTML = stateHTML('Поиск', searchMode === 'read'
+      ? 'Введите название книги или автора — будем искать книги для чтения.'
+      : 'Введите название книги, автора или чтеца.');
+  }
+}
+
+/* Поиск книг для чтения (режим «Читать») */
+async function runReadSearch(q, seq) {
+  try {
+    const items = await cseSearch(q);
+    if (seq !== state.seq) return;
+    if (items === null) {
+      view.innerHTML = stateHTML('Поиск недоступен', 'Не удалось подключиться к поиску книг для чтения. Проверьте интернет.');
+      return;
+    }
+    if (!items.length) { view.innerHTML = stateHTML('Ничего не найдено', 'По запросу «' + q + '» книг для чтения нет.'); return; }
+    state.items = items;
+    state.ended = true;
+    view.innerHTML = `<div class="section-title">Читать · найдено: ${items.length}</div>
+      <div class="sr-list">${items.map((b, i) => `
+        <button class="sr-row" style="--i:${i}" data-id="${esc(b.id)}">
+          <span class="sr-title">${esc(b.title)}</span>
+          ${b.snippet ? `<span class="sr-sub">${esc(b.snippet)}</span>` : ''}
+        </button>`).join('')}</div>`;
+    $$('.sr-row').forEach(el => el.onclick = () => go('rbook/' + el.dataset.id));
+  } catch (e) {
+    if (seq !== state.seq) return;
+    view.innerHTML = stateHTML('Ошибка', errorText(e), { label: 'Повторить' });
+    $('#state-action').onclick = () => runSearch(q);
   }
 }
 
@@ -1067,10 +1190,13 @@ async function runSearch(q) {
   state.loading = false;
   clearTail();
   if (q.length < 2) {
-    view.innerHTML = stateHTML('Поиск', 'Введите хотя бы 2 символа.');
+    view.innerHTML = stateHTML('Поиск', searchMode === 'read'
+      ? 'Введите хотя бы 2 символа названия книги или автора.'
+      : 'Введите хотя бы 2 символа.');
     return;
   }
   view.innerHTML = skeletonHTML(6);
+  if (searchMode === 'read') return runReadSearch(q, seq);
   try {
     const { items, total } = await apiSearch(q, 1);
     if (seq !== state.seq) return;
@@ -1330,7 +1456,7 @@ async function renderReadBook(id) {
       ${b.description ? `<div class="section-title">Описание</div><div class="book-desc">${esc(b.description)}</div>` : ''}`;
     $('#back').onclick = () => history.length > 1 ? history.back() : go('read');
     $('#read-cta').onclick = () => {
-      if (pos && pos.y > 0) pendingScroll = { id, y: pos.y };
+      if (pos && pos.c > 0 && pos.p === page) pendingSpot = { id, p: page, c: pos.c };
       go(`rread/${id}/${page}`);
     };
     const dlBtn = $('#dl-cta');
@@ -1385,50 +1511,59 @@ function rdPage(on) {
   else delete document.body.dataset.rdPage;
 }
 
-/* При смене размера текст перетекает — держим абзац на месте, чтобы не терять строку. */
-function rdKeepPlace(mutate) {
-  const ps = $$('.reader .rd-p, .reader .rd-chap');
-  const mid = window.scrollY + innerHeight * 0.35;
-  let idx = -1;
-  ps.forEach((p, i) => { if (p.offsetTop <= mid) idx = i; });
-  const before = idx >= 0 ? ps[idx].offsetTop - window.scrollY : null;
-  mutate();
-  if (before === null) return;
-  const after = ps[idx].offsetTop - window.scrollY;
-  if (after !== before) window.scrollBy(0, after - before);
-}
+/* Закладка/позиция: лист источника + номер экрана в нём. */
+let pendingSpot = null;
 
-/* Закладки и прыжок к сохранённой позиции */
-let pendingScroll = null;
-
+/* Текст у верхней строки текущего экрана — короткая подпись для закладки. */
 function readerExcerpt() {
-  const mid = window.scrollY + innerHeight * 0.4;
-  let cur = null;
-  for (const p of $$('.rd-p')) { if (p.offsetTop <= mid) cur = p; else break; }
-  return cur ? cur.textContent.trim().slice(0, 90) : '';
+  const stage = $('#rd-stage');
+  if (!stage) return '';
+  const r = stage.getBoundingClientRect();
+  const x = r.left + 14, y = r.top + 22;
+  const at = document.caretPositionFromPoint
+    ? document.caretPositionFromPoint(x, y)
+    : (document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y)?.startContainer && { offsetNode: document.caretRangeFromPoint(x, y).startContainer } : null);
+  let node = at && at.offsetNode;
+  if (!node) return '';
+  if (node.nodeType === 3) node = node.parentElement;
+  const p = node && node.closest && node.closest('.rd-p, .rd-chap');
+  return p ? p.textContent.trim().slice(0, 90) : '';
 }
 
 const bmIcon = '<svg viewBox="0 0 24 24" fill="none" width="14" height="14"><path d="M7 3h10a1 1 0 0 1 1 1v17l-6-4.2L6 21V4a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
 
-const bmAll = id => store.get('bm:' + id) || [];
+// Закладки: { p — лист источника, c — экран внутри листа, excerpt, ts }.
+// Старый формат { page, y } тоже читаем.
+const bmAll = id => (store.get('bm:' + id) || []).map(b => ({
+  p: b.p || b.page || 1,
+  c: b.c || 0,
+  excerpt: b.excerpt || '',
+  ts: b.ts || 0,
+}));
 function bmSave(id, list) { store.set('bm:' + id, list, 365 * 24 * 3600e3); }
 
-function renderBm(id, page) {
+function renderBm(id, page, col) {
   const box = $('#bm-list');
   if (!box) return;
   const list = bmAll(id);
   $('#bm-count').textContent = list.length ? String(list.length) : '';
-  $('#rd-bm').classList.toggle('is-on', list.some(bm => bm.page === page));
+  $('#rd-bm').classList.toggle('is-on', list.some(bm => bm.p === page && bm.c === col));
   box.classList.toggle('is-empty', !list.length);
   box.innerHTML = list.map((bm, i) => `
     <button class="bm-item" data-i="${i}">
-      <span class="bm-page">стр. ${bm.page}</span>
+      <span class="bm-page">стр. ${bm.p}</span>
       <span class="bm-ex">${esc(bm.excerpt)}</span>
     </button>`).join('');
   box.querySelectorAll('.bm-item').forEach(btn => btn.onclick = () => {
     const bm = list[Number(btn.dataset.i)];
-    if (bm.page === page) window.scrollTo({ top: bm.y, behavior: 'smooth' });
-    else { pendingScroll = { id, y: bm.y }; go(`rread/${id}/${bm.page}`); }
+    if (bm.p === rdView.src) {              // тот же лист — просто листаем экраны
+      rdView.si = Math.min(bm.c, rdView.cols - 1);
+      rdPlaceInstant();
+      openRdPanel(false);
+    } else {
+      pendingSpot = { id, p: bm.p, c: bm.c };
+      go(`rread/${id}/${bm.p}`);
+    }
   });
 }
 
@@ -1522,6 +1657,7 @@ function openRdPanel(on) {
   if (panel) panel.classList.toggle('is-hidden', !on);
   const btn = $('#rd-aa');
   if (btn) btn.classList.toggle('is-on', !!on);
+  rdShowAa(on);                              // открытая панель держит кнопку на виду
 }
 
 function wireRdPanel(id) {
@@ -1530,13 +1666,15 @@ function wireRdPanel(id) {
   $('#rd-scale').oninput = e => {
     rdSet.scale = Number(e.target.value) / 100;
     $('#rd-scale-val').textContent = e.target.value + '%';
-    rdKeepPlace(rdApply);
+    rdApply();
+    rdRelayout();
     rdSave();
   };
   $('#rd-lh').oninput = e => {
     rdSet.lh = Number(e.target.value);
     $('#rd-lh-val').textContent = rdSet.lh.toFixed(2);
-    rdKeepPlace(rdApply);
+    rdApply();
+    rdRelayout();
     rdSave();
   };
   $$('#rd-panel [data-seg]').forEach(box => {
@@ -1544,27 +1682,28 @@ function wireRdPanel(id) {
       rdSet[box.dataset.seg] = btn.dataset.v;
       box.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === btn));
       if (box.dataset.seg === 'theme') rdPage(true);
-      rdKeepPlace(rdApply);
+      rdApply();
+      rdRelayout();
       rdSave();
     });
   });
-  // Закладка на текущем месте страницы
+  // Закладка на текущем экране
   $('#rd-bm').onclick = () => {
-    const page = rdView.page;
+    const page = rdView.src, col = rdView.si;
     const list = bmAll(id);
-    const at = list.findIndex(bm => bm.page === page && Math.abs(bm.y - window.scrollY) < 200);
+    const at = list.findIndex(bm => bm.p === page && bm.c === col);
     if (at >= 0) { list.splice(at, 1); toast('Закладка удалена'); }
     else {
-      list.push({ page, y: window.scrollY, excerpt: readerExcerpt(), ts: Date.now() });
-      list.sort((a, b) => a.page - b.page || a.y - b.y);
+      list.push({ p: page, c: col, excerpt: readerExcerpt(), ts: Date.now() });
+      list.sort((a, b) => a.p - b.p || a.c - b.c);
       toast('Закладка добавлена');
     }
     bmSave(id, list);
-    renderBm(id, page);
+    renderBm(id, page, col);
   };
-  // Заметка к странице
+  // Заметка к текущей странице
   $('#nm-save').onclick = () => {
-    const page = rdView.page;
+    const page = rdView.src;
     const text = ($('#nm-text').value || '').trim();
     const list = nmAll(id).filter(n => n.page !== page);
     if (text) { list.push({ page, text, ts: Date.now() }); list.sort((a, b) => a.page - b.page); toast('Заметка сохранена'); }
@@ -1576,12 +1715,13 @@ function wireRdPanel(id) {
   openRdPanel(rdPanelOpen);
 }
 
-/* ---------- Листание читалки: без перерисовки всего экрана ---------- */
+/* ---------- Листание читалки: ровно экран текста за раз ---------- */
+/* Текст раскладывается в колонки высотой во весь экран: сколько влезло —
+   столько и на странице, дальше листаем вбок. Колонки считает сам браузер. */
 
-const RD_ANIM = 240;                                             // мс — совпадает с переходом ниже
-const RD_EASE = `transform ${RD_ANIM / 1000}s cubic-bezier(.22,.61,.36,1)`;
+const RD_GAP = 48;                                  // px — совпадает с .rd-page{column-gap}
 
-const rdView = { id: null, page: 1, total: 1, busy: false, cache: new Map() };
+const rdView = { id: null, src: 1, total: 1, si: 0, cols: 1, title: '', busy: false, cache: new Map() };
 
 const rdKey = (id, p) => id + ':' + p;
 
@@ -1593,10 +1733,10 @@ async function rdLoad(id, page) {
   return d;
 }
 
-/* Соседние страницы подтягиваем заранее — тогда свайп стартует мгновенно */
+/* Соседние листы источника подтягиваем заранее — листание стартует мгновенно */
 function rdPrefetch() {
   [1, -1].forEach(dir => {
-    const p = rdView.page + dir;
+    const p = rdView.src + dir;
     if (p >= 1 && p <= rdView.total) rdLoad(rdView.id, p).catch(() => {});
   });
 }
@@ -1605,72 +1745,122 @@ const rdBodyHTML = d => d.blocks.map(b => b.t === 'h'
   ? `<h3 class="rd-chap">${esc(b.x)}</h3>`
   : `<p class="rd-p">${esc(b.x)}</p>`).join('') || '<p class="rd-p">Страница пуста.</p>';
 
-const rdPct = (page, total) => total ? Math.min(100, Math.round(page / total * 100)) : 0;
+const rdStageEl = () => $('#rd-stage');
+const rdCurEl = () => $('#rd-cur');
 
-/* Меняем всё, кроме текста: счётчик, прогресс, кнопки, закладки, адрес */
-function rdSync(page) {
-  rdView.page = page;
-  state.rd = { id: rdView.id, page, total: rdView.total };
-  store.set('lr:pos:' + rdView.id, { p: page, t: rdView.total, title: rdView.title, y: 0 }, 365 * 24 * 3600e3);
-  const cnt = $('#rd-page');
-  if (cnt) cnt.textContent = page + ' / ' + rdView.total;
-  const bar = $('#rd-pct');
-  if (bar) bar.style.width = rdPct(page, rdView.total) + '%';
-  renderBm(rdView.id, page);
-  renderNm(rdView.id, page);
-  history.replaceState({}, '', location.pathname + location.search + `#/rread/${rdView.id}/${page}`);
+/* Шаг ленты: ширина колонки плюс отступ между колонками */
+const rdStride = () => (rdStageEl() ? rdStageEl().clientWidth : 0) + RD_GAP;
+
+/* Сдвигаем ленту к текущему экрану (плавность задана в CSS) */
+function rdPlace() {
+  const cur = rdCurEl();
+  if (!cur) return;
+  cur.style.transition = '';
+  cur.style.transform = `translateX(${-rdView.si * rdStride()}px)`;
 }
 
-/* Страницы доезжают до края, затем содержимое меняется местами */
-function rdSettle(cur, ghost, w, dir, target) {
-  rdView.busy = true;
-  cur.style.transition = RD_EASE;
-  ghost.style.transition = RD_EASE;
-  cur.style.transform = `translateX(${-dir * w}px)`;
-  ghost.style.transform = 'translateX(0)';
-  window.scrollTo(0, 0);
-  setTimeout(() => {
-    cur.innerHTML = ghost.innerHTML;
-    cur.style.transition = ''; cur.style.transform = '';
-    ghost.remove();
-    rdView.busy = false;
-    rdSync(target);
-    rdPrefetch();
-  }, RD_ANIM);
+/* То же, но мгновенно — когда текст только что подменили */
+function rdPlaceInstant() {
+  const cur = rdCurEl();
+  if (!cur) return;
+  cur.style.transition = 'none';
+  cur.style.transform = `translateX(${-rdView.si * rdStride()}px)`;
+  void cur.offsetWidth;
+  cur.style.transition = '';
 }
 
-/* Перелистывание кнопками и стрелками — та же анимация, что и у свайпа */
-async function rdSlideTo(target, dir) {
-  if (rdView.busy || !rdView.id || target < 1 || target > rdView.total) return;
-  const stage = $('#rd-stage'), cur = $('#rd-cur');
+/* Пересчёт колонок под текущий экран и настройки чтения.
+   preserve — постараться остаться на том же месте текста. */
+function rdRelayout(preserve) {
+  const stage = rdStageEl(), cur = rdCurEl();
   if (!stage || !cur) return;
+  const frac = preserve && rdView.cols > 1 ? (rdView.si + 1) / rdView.cols : null;
+  const w = Math.max(1, Math.round(stage.clientWidth));
+  stage.style.setProperty('--rd-colw', w + 'px');
+  stage.style.setProperty('--rd-gap', RD_GAP + 'px');
+  const stride = w + RD_GAP;
+  rdView.cols = Math.max(1, Math.round((cur.scrollWidth + RD_GAP) / stride));
+  if (frac != null) rdView.si = Math.min(rdView.cols - 1, Math.max(0, Math.round(frac * rdView.cols) - 1));
+  else rdView.si = Math.min(rdView.si, rdView.cols - 1);
+  rdPlaceInstant();
+  rdSync();
+}
+
+/* Прогресс по книге целиком */
+function rdProgress() {
+  const { src, total, si, cols } = rdView;
+  if (!total) return 0;
+  return Math.min(100, Math.round((((src - 1) + (si + 1) / Math.max(1, cols)) / total) * 100));
+}
+
+/* Меняем всё, кроме текста: счётчик, прогресс, закладки, адрес */
+function rdSync() {
+  const { id, src, total, si } = rdView;
+  if (!id) return;
+  store.set('lr:pos:' + id, { p: src, t: total, c: si, title: rdView.title }, 365 * 24 * 3600e3);
+  const cnt = $('#rd-page');
+  if (cnt) cnt.textContent = src + ' / ' + total;
+  const bar = $('#rd-pct');
+  if (bar) bar.style.width = rdProgress() + '%';
+  renderBm(id, src, si);
+  renderNm(id, src);
+  history.replaceState({}, '', location.pathname + location.search + `#/rread/${id}/${src}`);
+}
+
+/* Подменяем текст на соседнем листе источника */
+function rdShowSrc(d) {
+  const cur = rdCurEl();
+  if (!cur) return;
+  rdView.src = d.page;
+  rdView.total = d.total;
+  if (d.title) { rdView.title = d.title; document.title = d.title + ' — Полка'; }
+  cur.innerHTML = rdBodyHTML(d);
+  rdRelayout(false);
+  rdPrefetch();
+}
+
+/* Перелистнуть на один экран: вбок по колонкам, на краю — соседний лист */
+async function rdFlip(dir) {
+  if (!rdView.id || rdView.busy) return;
+  const want = rdView.si + dir;
+  if (want >= 0 && want < rdView.cols) { rdView.si = want; rdPlace(); rdSync(); return; }
+  const next = rdView.src + dir;
+  if (next < 1 || next > rdView.total) return;
   rdView.busy = true;
   let d;
-  try { d = await rdLoad(rdView.id, target); }
+  try { d = await rdLoad(rdView.id, next); }
   catch { rdView.busy = false; toast('Страница не загрузилась'); return; }
-  const w = stage.clientWidth || 1;
-  const ghost = document.createElement('article');
-  ghost.className = 'reader rd-page rd-ghost';
-  ghost.innerHTML = rdBodyHTML(d);
-  ghost.style.transition = 'none';
-  ghost.style.transform = `translateX(${dir > 0 ? w : -w}px)`;
-  stage.appendChild(ghost);
-  cur.style.transition = 'none';
-  cur.style.transform = 'translateX(0)';
-  void ghost.offsetWidth;                     // фиксируем стартовое положение до анимации
-  rdSettle(cur, ghost, w, dir, target);
+  rdView.si = 0;
+  rdShowSrc(d);
+  if (dir < 0) { rdView.si = rdView.cols - 1; rdPlaceInstant(); rdSync(); }
+  rdView.busy = false;
 }
 
-/* Свайп: страница едет за пальцем, соседняя выезжает навстречу */
-const sw = { on: false, drag: false, pid: 0, x0: 0, y0: 0, dx: 0, t0: 0, dir: 1, cur: null, ghost: null, w: 1, ready: false };
+/* Кнопка «Aa»: появляется по тапу по экрану и снова прячется сама */
+let aaTimer = 0;
+function rdShowAa(on) {
+  const b = $('#rd-aa');
+  if (!b) return;
+  b.classList.toggle('is-away', !on);
+  clearTimeout(aaTimer);
+  if (on) aaTimer = setTimeout(() => { const x = $('#rd-aa'); if (x) x.classList.add('is-away'); }, 4000);
+}
+function rdTap() {
+  if (rdPanelOpen) { openRdPanel(false); return; }
+  const b = $('#rd-aa');
+  if (b) rdShowAa(b.classList.contains('is-away'));
+}
+
+/* Свайп: лента едет за пальцем, отпустили — доезжает до ближайшего экрана */
+const sw = { on: false, drag: false, pid: 0, x0: 0, y0: 0, dx: 0 };
 
 function bindRdSwipe() {
-  const stage = $('#rd-stage');
+  const stage = rdStageEl();
   if (!stage) return;
-  sw.on = false; sw.drag = false; sw.cur = sw.ghost = null;
+  sw.on = false; sw.drag = false;
 
   stage.addEventListener('pointerdown', e => {
-    if (rdView.busy || rdView.total < 2) return;
+    if (rdView.busy) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     sw.on = true; sw.drag = false; sw.pid = e.pointerId;
     sw.x0 = e.clientX; sw.y0 = e.clientY; sw.dx = 0;
@@ -1679,59 +1869,38 @@ function bindRdSwipe() {
   stage.addEventListener('pointermove', e => {
     if (!sw.on || e.pointerId !== sw.pid) return;
     const dx = e.clientX - sw.x0, dy = e.clientY - sw.y0;
-
     if (!sw.drag) {
-      if (Math.abs(dx) < 12) return;
-      if (Math.abs(dy) > Math.abs(dx) * 1.2) { sw.on = false; return; }   // жест вертикальный — это скролл
-      const dir = dx < 0 ? 1 : -1;
-      const target = rdView.page + dir;
-      if (target < 1 || target > rdView.total) { sw.on = false; return; }
-      const cached = rdView.cache.get(rdKey(rdView.id, target));
-      sw.dir = dir; sw.drag = true; sw.t0 = Date.now(); sw.ready = !!cached;
-      sw.cur = $('#rd-cur'); sw.w = stage.clientWidth || 1;
-      const ghost = document.createElement('article');
-      ghost.className = 'reader rd-page rd-ghost';
-      ghost.innerHTML = cached ? rdBodyHTML(cached) : '';
-      ghost.style.transition = 'none';
-      ghost.style.transform = `translateX(${dir > 0 ? sw.w : -sw.w}px)`;
-      stage.appendChild(ghost);
-      sw.ghost = ghost;
-      sw.cur.style.transition = 'none';
-      if (!cached) {
-        rdLoad(rdView.id, target)
-          .then(d => { sw.ready = true; ghost.innerHTML = rdBodyHTML(d); })
-          .catch(() => {});
-      }
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      if (Math.abs(dy) > Math.abs(dx)) { sw.on = false; return; }   // жест вертикальный — не листаем
+      sw.drag = true;
+      const cur = rdCurEl();
+      if (cur) cur.style.transition = 'none';
       try { stage.setPointerCapture(e.pointerId); } catch {}
     }
-
-    if (!sw.drag) return;
     e.preventDefault();
-    const lim = sw.w;
     let pull = e.clientX - sw.x0;
-    if (Math.abs(pull) > lim) pull = Math.sign(pull) * (lim + (Math.abs(pull) - lim) * 0.35);   // за краем — с сопротивлением
+    const atStart = rdView.src === 1 && rdView.si === 0;
+    const atEnd = rdView.src === rdView.total && rdView.si === rdView.cols - 1;
+    if ((pull > 0 && atStart) || (pull < 0 && atEnd)) pull *= 0.35;   // за краем книги — с сопротивлением
     sw.dx = pull;
-    sw.cur.style.transform = `translateX(${pull}px)`;
-    sw.ghost.style.transform = `translateX(${(sw.dir > 0 ? lim : -lim) + pull}px)`;
+    const cur = rdCurEl();
+    if (cur) cur.style.transform = `translateX(${-rdView.si * rdStride() + pull}px)`;
   });
 
   const end = e => {
     if (!sw.on || e.pointerId !== sw.pid) return;
     sw.on = false;
-    if (!sw.drag) return;
+    const dragged = sw.drag;
     sw.drag = false;
-    const cur = sw.cur, ghost = sw.ghost, w = sw.w, dir = sw.dir;
-    sw.cur = sw.ghost = null;
-    const flick = Date.now() - sw.t0 < 350 && Math.abs(sw.dx) > 36;
-    if (sw.ready && (flick || Math.abs(sw.dx) > w * 0.25)) {
-      rdSettle(cur, ghost, w, dir, rdView.page + dir);
-    } else {                                   // не дотянули — возвращаем на место
-      cur.style.transition = RD_EASE;
-      ghost.style.transition = RD_EASE;
-      cur.style.transform = 'translateX(0)';
-      ghost.style.transform = `translateX(${dir > 0 ? w : -w}px)`;
-      setTimeout(() => { ghost.remove(); cur.style.transition = ''; cur.style.transform = ''; }, RD_ANIM);
+    const cur = rdCurEl();
+    if (cur) cur.style.transition = '';
+    // короткий тап без движения — показать или спрятать кнопку настроек
+    if (!dragged) {
+      if (Math.abs(e.clientX - sw.x0) < 10 && Math.abs(e.clientY - sw.y0) < 10) rdTap();
+      return;
     }
+    if (Math.abs(sw.dx) > rdStride() * 0.25) rdFlip(sw.dx < 0 ? 1 : -1);
+    else rdPlace();
   };
   stage.addEventListener('pointerup', end);
   stage.addEventListener('pointercancel', end);
@@ -1747,35 +1916,32 @@ async function renderReader(id, page) {
   try {
     const d = await apiLrPage(id, page);
     if (seq !== state.seq) return;
-    store.set('lr:pos:' + id, { p: d.page, t: d.total, title: d.title, y: 0 }, 365 * 24 * 3600e3);
-    state.rd = { id, page: d.page, total: d.total };
-    const body = d.blocks.map(b => b.t === 'h'
-      ? `<h3 class="rd-chap">${esc(b.x)}</h3>`
-      : `<p class="rd-p">${esc(b.x)}</p>`).join('');
-    const pct = d.total ? Math.min(100, Math.round(d.page / d.total * 100)) : 0;
-    // В книге — только текст, тонкая полоса прогресса и одна кнопка настроек.
+    // В книге — только текст, тонкая полоса прогресса и кнопка настроек.
     view.innerHTML = `
-      <div class="rd-topline"><i id="rd-pct" style="width:${pct}%"></i></div>
-      <button class="rd-fab" id="rd-aa" aria-label="Настройки чтения" title="Настройки чтения">Aa</button>
+      <div class="rd-topline"><i id="rd-pct" style="width:0%"></i></div>
+      <button class="rd-fab is-away" id="rd-aa" aria-label="Настройки чтения" title="Настройки чтения">Aa</button>
       ${rdPanelHTML()}
-      <div class="rd-stage" id="rd-stage"><article class="reader rd-page" id="rd-cur">${body || '<p class="rd-p">Страница пуста.</p>'}</article></div>`;
+      <div class="rd-stage" id="rd-stage"><article class="reader rd-page" id="rd-cur">${rdBodyHTML(d)}</article></div>`;
     if (d.title) document.title = d.title + ' — Полка';
     rdApply();
     rdPage(true);
-    renderBm(id, d.page);
+    if (rdView.id !== id) { rdView.cache.clear(); rdView.id = id; }
+    rdView.src = d.page; rdView.total = d.total; rdView.title = d.title;
+    rdView.si = 0; rdView.busy = false;
+    renderBm(id, d.page, 0);
     renderNm(id, d.page);
     wireRdPanel(id);
-    // Контекст листания: кэш страниц живёт, пока открыта та же книга
-    if (rdView.id !== id) { rdView.cache.clear(); rdView.id = id; }
-    rdView.page = d.page; rdView.total = d.total; rdView.title = d.title; rdView.busy = false;
-    rdSync(d.page);
+    rdRelayout(false);
     bindRdSwipe();
-    rdPrefetch();
-    if (pendingScroll && pendingScroll.id == id) {
-      const y = pendingScroll.y;
-      pendingScroll = null;
-      requestAnimationFrame(() => window.scrollTo(0, y));
+    // вернуться на сохранённый экран (закладка или позиция чтения)
+    const spot = pendingSpot && pendingSpot.id === id ? pendingSpot : null;
+    pendingSpot = null;
+    if (spot && spot.p === rdView.src && spot.c > 0) {
+      rdView.si = Math.min(spot.c, rdView.cols - 1);
+      rdPlaceInstant();
+      rdSync();
     }
+    rdPrefetch();
   } catch (e) {
     if (seq !== state.seq) return;
     view.innerHTML = back + stateHTML('Ошибка', errorText(e), { label: 'Повторить' });
@@ -2050,6 +2216,12 @@ function bindUI() {
     runSearch('');
   };
 
+  // Переключатель «Аудиокниги / Читать»
+  $('#search-modes').addEventListener('click', e => {
+    const btn = e.target.closest('.search-mode');
+    if (btn) setSearchMode(btn.dataset.sm);
+  });
+
   input.addEventListener('input', () => { syncClear(); runSearchDebounced(); });
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
@@ -2083,14 +2255,13 @@ function bindUI() {
     else if (t === 'offline') go('cat/offline');
   });
 
-  // Стрелки ←/→ — листание страниц в читалке
+  // Стрелки ←/→ — листание экранов в читалке
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && rdPanelOpen) { openRdPanel(false); return; }
-    const rd = state.rd;
-    if (!rd || e.altKey || e.metaKey || e.ctrlKey) return;
+    if (!rdView.id || e.altKey || e.metaKey || e.ctrlKey) return;
     if (/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
-    if (e.key === 'ArrowRight' && rd.page < rd.total) rdSlideTo(rd.page + 1, 1);
-    else if (e.key === 'ArrowLeft' && rd.page > 1) rdSlideTo(rd.page - 1, -1);
+    if (e.key === 'ArrowRight') { e.preventDefault(); rdFlip(1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); rdFlip(-1); }
   });
 
   const toTop = $('#to-top');
@@ -2101,23 +2272,16 @@ function bindUI() {
   $('#dl-cancel').onclick = () => {
     if (dl.task) { dl.task.cancel = true; $('#dl-sub').textContent = 'Останавливаю…'; }
   };
-  let posTick = 0;
   window.addEventListener('scroll', () => {
-    const y = window.scrollY;
-    toTop.hidden = y < 900;
+    toTop.hidden = window.scrollY < 900;
     saveScroll();
-    // позиция чтения — сохраняем с лёгким троттлингом
-    if (state.rd && Date.now() - posTick > 1500) {
-      posTick = Date.now();
-      const pos = store.get('lr:pos:' + state.rd.id);
-      if (pos && pos.p === state.rd.page) store.set('lr:pos:' + state.rd.id, { ...pos, y: window.scrollY }, 365 * 24 * 3600e3);
-    }
   }, { passive: true });
 }
 
 function boot() {
   applyTheme();
   rdApply();
+  paintSearchMode();
   // загрузки, прерванные закрытием страницы, помечаем как паузу — их можно продолжить
   Object.keys(localStorage).filter(k => k.startsWith('polka:dl:')).forEach(k => {
     try {

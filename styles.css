@@ -566,10 +566,37 @@ body.playing .ctrl-main{animation:pulse 2.6s ease-in-out infinite}
 .play-cta svg{width:26px;height:26px}
 
 /* ---------- 13. Поиск ---------- */
-.search-bar{
-  display:flex;align-items:center;gap:8px;
-  animation:fadeIn .2s ease;
+.search-bar{animation:fadeIn .2s ease}
+.search-row{display:flex;align-items:center;gap:8px}
+
+/* Переключатель: аудиокниги или книги для чтения */
+.search-modes{display:flex;gap:6px;margin-top:9px}
+.search-mode{
+  flex:none;padding:6px 14px;border-radius:999px;white-space:nowrap;
+  font-size:12.5px;font-weight:660;color:var(--muted);
+  background:color-mix(in srgb,var(--surface-solid) 62%,transparent);
+  border:1px solid var(--line-soft);
+  transition:color .2s ease,background .3s ease,box-shadow .3s ease,transform .16s ease;
 }
+.search-mode:active{transform:scale(.96)}
+.search-mode.is-active{color:var(--ink-fg);background:var(--grad);box-shadow:var(--glow);border-color:transparent}
+
+/* Результаты поиска книг для чтения */
+.sr-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.sr-row{
+  display:flex;flex-direction:column;gap:3px;text-align:left;
+  padding:12px 14px;border-radius:14px;background:var(--surface);
+  border:1px solid var(--line-soft);transition:transform .16s ease;
+}
+.sr-row:active{transform:scale(.985)}
+.sr-title{font-size:14.5px;font-weight:680;color:var(--text);line-height:1.3}
+.sr-sub{
+  font-size:12.5px;color:var(--muted);line-height:1.45;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+
+/* Скрытый встроенный поиск — держим вне экрана, показываем своими карточками */
+.cse-hidden{position:absolute;left:-9999px;top:0;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none}
 .search-field{
   flex:1;min-width:0;display:flex;align-items:center;gap:9px;
   height:46px;padding:0 8px 0 14px;border-radius:14px;
@@ -748,10 +775,18 @@ a.chip:active{background:var(--line)}
   color:color-mix(in srgb,var(--text) 90%,var(--muted));
 }
 
-/* Свайп-перелистывание: обе страницы едут вместе с пальцем */
-.rd-stage{position:relative;overflow:clip;touch-action:pan-y}
-.rd-page{will-change:transform;backface-visibility:hidden;user-select:none;-webkit-user-select:none}
-.rd-ghost{position:absolute;top:0;left:0;width:100%;pointer-events:none}
+/* Перелистывание «экранами»: страница показывает ровно столько текста,
+   сколько влезает, а продолжение браузер сам раскладывает в колонки вбок. */
+.rd-stage{position:relative;overflow:hidden;touch-action:none}
+.rd-page{
+  height:100%;width:100%;
+  column-width:var(--rd-colw,320px);
+  column-gap:var(--rd-gap,48px);
+  column-fill:auto;
+  will-change:transform;backface-visibility:hidden;
+  user-select:none;-webkit-user-select:none;
+  transition:transform .24s cubic-bezier(.22,.61,.36,1);
+}
 
 /* Тема страницы — действует, пока открыт экран чтения */
 body[data-rd-page="sepia"]{
@@ -791,12 +826,18 @@ body[data-rd-page]::before,
   background:color-mix(in srgb,var(--surface-solid) 82%,transparent);
   border:1px solid var(--line);box-shadow:var(--shadow-m);
   backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
-  transition:transform .16s ease,background .2s ease,color .2s ease;
+  transition:transform .22s ease,opacity .22s ease,background .2s ease,color .2s ease;
 }
 .rd-fab:active{transform:scale(.92)}
 .rd-fab.is-on{color:var(--ink-fg);background:var(--ink);border-color:transparent}
-body.is-reader .view{padding-top:calc(var(--sat) + 22px);padding-bottom:calc(96px + var(--sab))}
-body.is-reader .rd-stage{max-width:var(--rd-w);margin-inline:auto}
+/* Кнопка настроек прячется, пока читатель не ткнёт по экрану */
+body.is-reader .rd-fab.is-away{opacity:0;transform:scale(.72) translateY(8px);pointer-events:none}
+body.is-reader{overflow:hidden}
+body.is-reader .view{padding-top:calc(var(--sat) + 16px);padding-bottom:calc(var(--sab) + 12px)}
+body.is-reader .rd-stage{
+  height:calc(100dvh - var(--sat) - var(--sab) - 28px);
+  max-width:var(--rd-w);margin-inline:auto;
+}
 body.is-reader .mini,body.is-reader .to-top,body.is-reader .tabbar{display:none !important}
 
 /* Карточки «Продолжить» */
