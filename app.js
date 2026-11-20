@@ -117,6 +117,20 @@ async function cacheGetText(name, key) {
   } catch { return null; }
 }
 
+/* Обложку тоже сохраняем на устройство — вместе с книгой, чтобы она
+   показывалась в офлайне. Ключ — исходный адрес картинки: тогда те же
+   <img src="…"> попадают в кэш по своим обычным URL. */
+async function cacheCover(url) {
+  if (!url) return false;
+  try {
+    const c = await caches.open(DATA_CACHE);
+    if (await c.match(url)) return true;
+    const res = await fetch(url, { mode: 'no-cors', credentials: 'omit' });
+    if (res && (res.type === 'opaque' || res.ok)) { await c.put(url, res); return true; }
+  } catch {}
+  return false;
+}
+
 /* ---------- 4. Сеть ---------- */
 
 const inflight = new Map();
@@ -553,6 +567,7 @@ const dl = {
         t.done = i + 1;
         this.paint();
       }
+      await cacheCover(coverImg(book.cover));   // обложка — тоже на устройство
       const status = t.cancel ? 'paused' : 'done';
       store.set('dl:' + t.id, { status, total, done: t.done, title: t.title, book }, 365 * 24 * 3600e3);
       toast(status === 'done' ? 'Готово — можно слушать без сети' : 'Загрузка остановлена');
@@ -589,6 +604,7 @@ const dl = {
         this.paint();
         await sleep(500);   // бережём лимиты шлюза
       }
+      await cacheCover(lrCover(book && book.cover));   // обложка — тоже на устройство
       const status = t.cancel ? 'paused' : 'done';
       store.set('dl:' + t.id, meta(status), 365 * 24 * 3600e3);
       toast(status === 'done' ? 'Готово — можно читать без сети' : 'Загрузка остановлена');
@@ -600,15 +616,19 @@ const dl = {
 
   async remove(id, urls) {
     try {
-      const name = /^r\d+$/.test(id) ? DATA_CACHE : MEDIA_CACHE;
-      const c = await caches.open(name);
-      if (urls) await Promise.all(urls.map(u => c.delete(u)));
-      else {
-        const bookId = id.replace(/^r/, '');
+      const read = /^r\d+$/.test(id);
+      const c = await caches.open(read ? DATA_CACHE : MEDIA_CACHE);
+      if (read) {
         const keys = await c.keys();
-        const prefix = offPagePrefix(bookId);
+        const prefix = offPagePrefix(id.replace(/^r/, ''));
         await Promise.all(keys.map(k => String(k.url).startsWith(prefix) && c.delete(k)));
+      } else if (urls) {
+        await Promise.all(urls.map(u => c.delete(u)));
       }
+      // вместе с книгой убираем и её обложку
+      const book = (store.getStale('dl:' + id) || {}).book || {};
+      const cover = read ? lrCover(book.cover) : coverImg(book.cover);
+      if (cover) { const dc = await caches.open(DATA_CACHE); await dc.delete(cover); }
     } catch {}
     localStorage.removeItem('polka:dl:' + id);
     toast('Загрузка удалена');
@@ -1279,15 +1299,23 @@ async function enrichReadItems(raw, seq) {
 function patchReadCard(id, b) {
   const card = view.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
   if (!card) return;
-  if (b.cover) {
-    const cover = card.querySelector('.cover');
-    if (cover && !cover.querySelector('img')) {
-      const img = document.createElement('img');
-      img.src = lrCover(b.cover);
-      img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
-      img.referrerPolicy = 'no-referrer';
-      cover.insertBefore(img, cover.firstChild);
-    }
+  const cover = card.querySelector('.cover');
+  if (cover && b.cover && !cover.querySelector('img')) {
+    const img = document.createElement('img');
+    img.src = lrCover(b.cover);
+    img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
+    img.referrerPolicy = 'no-referrer';
+    cover.insertBefore(img, cover.firstChild);
+  }
+  if (cover && b.genre && !cover.querySelector('.genre-pill')) {
+    const p = document.createElement('span');
+    p.className = 'genre-pill'; p.textContent = b.genre;
+    cover.appendChild(p);
+  }
+  if (cover && b.time && !cover.querySelector('.dur-pill')) {
+    const p = document.createElement('span');
+    p.className = 'dur-pill'; p.innerHTML = clockIcon + esc(b.time);
+    cover.appendChild(p);
   }
   if (b.title) {
     const t = card.querySelector('.card-title');
@@ -2096,6 +2124,9 @@ const player = {
   book: null,
   index: 0,
   sheet: false,
+  wantPlay: false,
+  recovering: false,
+  lastRecover: 0,
 
   get chapters() { return (this.book && this.book.chapters) || []; },
   get current() { return this.chapters[this.index] || null; },
@@ -2108,16 +2139,54 @@ const player = {
     audio.src = ch.url;
     audio.currentTime = 0;
     this.paint();
-    if (autoplay) audio.play().catch(() => toast('Нажмите ещё раз, чтобы начать воспроизведение'));
+    if (autoplay) { this.wantPlay = true; audio.play().catch(() => toast('Нажмите ещё раз, чтобы начать воспроизведение')); }
   },
 
   play(i) {
     if (!this.book) return;
     if (typeof i === 'number' && i !== this.index) return this.load(this.book, i, true);
-    audio.play().catch(() => {});
+    this.wantPlay = true;
+    const p = audio.play();
+    if (p && p.catch) p.catch(err => this.recover(err));
   },
 
-  toggle() { audio.paused ? this.play() : audio.pause(); },
+  pause() { if (this.book) { this.wantPlay = false; audio.pause(); } },
+
+  toggle() {
+    // Элемент мог «зависнуть»: формально играет, но звука нет и потока нет.
+    const dead = audio.error || audio.networkState === audio.NETWORK_NO_SOURCE;
+    if (audio.paused || dead) this.play(); else this.pause();
+  },
+
+  /* Воспроизведение не стартует — обычно ссылка на главу протухла, пока книга
+     стояла на паузе, либо поток оборвался. Заново берём страницу книги и
+     продолжаем с той же секунды. Раньше помогала только перезагрузка приложения. */
+  async recover(err) {
+    if (this.recovering || !this.book || !this.book.slug) return;
+    if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) return;
+    const now = Date.now();
+    if (now - this.lastRecover < 3000) return;      // не частим с перезапросами
+    this.lastRecover = now;
+    this.recovering = true;
+    const at = audio.currentTime || 0;
+    const index = this.index;
+    try {
+      store.drop('book:' + this.book.slug);
+      const fresh = await apiBook(this.book.slug);
+      if (!fresh.chapters.length) throw new Error('empty');
+      this.book = fresh;
+      this.index = Math.min(index, fresh.chapters.length - 1);
+      audio.src = this.current.url;
+      audio.load();
+      if (at > 1) audio.addEventListener('loadedmetadata', () => { audio.currentTime = at; }, { once: true });
+      this.paint();
+      await audio.play();
+    } catch {
+      toast('Не удалось включить — проверьте связь');
+    } finally {
+      this.recovering = false;
+    }
+  },
 
   next(auto = false) {
     if (this.index >= this.chapters.length - 1) {
@@ -2141,12 +2210,15 @@ const player = {
     this.persist();
     const last = store.get('last');
     if (last) store.set('last', { ...last, closed: true }, 365 * 24 * 3600e3);
-    audio.pause();
-    audio.removeAttribute('src');
-    audio.load();
+    // Книгу забываем до сброса src: иначе на пустой источник может прилететь
+    // событие error, и плеер тут же поднимет книгу заново.
     this.book = null;
     this.index = 0;
     this.sheet = false;
+    this.wantPlay = false;
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
     $('#sheet').classList.add('is-hidden');
     document.body.classList.remove('sheet-open', 'playing');
     $('#mini').classList.add('is-hidden');
@@ -2247,22 +2319,7 @@ audio.addEventListener('timeupdate', () => {
 
 audio.addEventListener('ended', () => player.next(true));
 
-audio.addEventListener('error', async () => {
-  // ссылка могла протухнуть — перезапрашиваем страницу книги
-  const b = player.book;
-  if (!b || !b.slug || audio.dataset.retried === b.slug) return;
-  audio.dataset.retried = b.slug;
-  try {
-    store.drop('book:' + b.slug);
-    const fresh = await apiBook(b.slug);
-    if (!fresh.chapters.length) return;
-    const keep = audio.currentTime;
-    player.book = fresh;
-    audio.src = fresh.chapters[player.index].url;
-    if (keep > 1) audio.currentTime = keep;
-    if (document.body.classList.contains('playing')) audio.play().catch(() => {});
-  } catch {}
-});
+audio.addEventListener('error', () => { if (player.wantPlay) player.recover(); });
 
 let sheetDragging = false;
 $('#sheet-seek').addEventListener('input', () => {
@@ -2307,8 +2364,10 @@ $('#sheet-bg').onclick = closeSheet;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
 if ('mediaSession' in navigator) {
-  navigator.mediaSession.setActionHandler('play', () => player.toggle());
-  navigator.mediaSession.setActionHandler('pause', () => player.toggle());
+  // именно play/pause, а не toggle: система присылает действие по своему
+  // состоянию, и toggle от него работал наоборот — «пауза» больше не включалась
+  navigator.mediaSession.setActionHandler('play', () => player.play());
+  navigator.mediaSession.setActionHandler('pause', () => player.pause());
   navigator.mediaSession.setActionHandler('nexttrack', () => player.next());
   navigator.mediaSession.setActionHandler('previoustrack', () => player.prev());
   navigator.mediaSession.setActionHandler('seekbackward', () => player.seek(-15));

@@ -2,7 +2,6 @@
    Стратегия: документ и код (js/css) — сеть-первым, чтобы обновления доезжали сразу;
    остальное — из кэша с фоновым обновлением. */
 const CACHE = 'polka-shell-v15';
-const MEDIA_CACHE = 'polka-media';      // аудио, скачанное для офлайна
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', e => {
@@ -23,14 +22,12 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   if (url.pathname === '/api' || url.pathname === '/healthz') return;   // данные каталога — только сеть
 
-  // Аудио с CDN: если глава скачана для офлайна — играем из кэша, без сети.
+  // Аудио глав и обложки книг: если скачано для офлайна — отдаём из кэша, без сети.
   if (url.origin !== location.origin) {
-    if (req.destination === 'audio' || /\.(mp3|m4a|aac|ogg|opus|wav)$/i.test(url.pathname)) {
-      e.respondWith(
-        caches.open(MEDIA_CACHE).then(c => c.match(req).then(hit => hit || fetch(req)))
-      );
+    if (req.destination === 'audio' || req.destination === 'image' || /\.(mp3|m4a|aac|ogg|opus|wav)$/i.test(url.pathname)) {
+      e.respondWith(caches.match(req).then(hit => hit || fetch(req)));
     }
-    return;   // остальное (обложки CDN) — мимо кэша
+    return;   // остальное (чужие ресурсы CDN) — мимо кэша
   }
 
   // Документ и код приложения (js/css): всегда пробуем сеть, при отсутствии — кэш.

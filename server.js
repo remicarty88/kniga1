@@ -58,6 +58,27 @@ function decodeBody(buf, contentType) {
 
 const blocked = html => /ddos-guard|DDoS-Guard|Just a moment|Checking your browser/i.test(html.slice(0, 3000));
 
+/* Шлюз нужен только для страниц каталога — они небольшие. Всё крупное
+   (аудиофайлы источника лежат на том же домене) нам не нужно: не держим
+   такие тела целиком в памяти, иначе процесс быстро раздувается. */
+const MAX_BODY = 4 * 1024 * 1024;
+
+async function readCapped(r, limit = MAX_BODY) {
+  const len = Number(r.headers.get('content-length') || 0);
+  if (len > limit) throw new Error('body too large');
+  const reader = r.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > limit) { reader.cancel().catch(() => {}); throw new Error('body too large'); }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
 async function grab(url, extraHeaders) {
   const origin = new URL(url).origin;
   return fetch(url, {
@@ -86,7 +107,7 @@ async function proxy(req, res, target) {
     if (attempt) await new Promise(r => setTimeout(r, 600));
     try {
       const r = await grab(u.href);
-      const buf = Buffer.from(await r.arrayBuffer());
+      const buf = await readCapped(r);
       const body = decodeBody(buf, r.headers.get('content-type'));
       if (r.status === 200 && !blocked(body)) html = body;
     } catch { /* следующая попытка или резервный шлюз */ }
@@ -95,7 +116,7 @@ async function proxy(req, res, target) {
   if (html === null) {
     try {
       const r = await grab(FALLBACK(u.href), { 'x-return-format': 'html' });
-      const buf = Buffer.from(await r.arrayBuffer());
+      const buf = await readCapped(r);
       const body = decodeBody(buf, r.headers.get('content-type'));
       if (r.ok && !blocked(body)) html = body;
     } catch { /* ниже вернём 502 */ }
@@ -171,3 +192,8 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log('Полка: http://localhost:' + PORT);
 });
+
+/* Долгие «висящие» соединения держат свои буферы в памяти — закрываем их вовремя. */
+server.keepAliveTimeout = 15e3;
+server.headersTimeout = 20e3;
+server.requestTimeout = 60e3;
