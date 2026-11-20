@@ -653,8 +653,12 @@ function route() {
 
   const searching = head === 'search';
   const detail = head === 'book' || head === 'rbook' || head === 'rread';
+  const reader = head === 'rread';
   applyMode(READ_HEADS.includes(head) ? 'read' : 'listen');
-  rdPage(head === 'rread');   // тема страницы — только в читалке
+  rdPage(reader);   // тема страницы — только в читалке
+  // В читалке не должно быть ничего лишнего: только текст и кнопка настроек.
+  document.body.classList.toggle('is-reader', reader);
+  $('#topbar').classList.toggle('is-hidden', reader);
   $('#headbar').classList.toggle('is-hidden', detail);
   $('#tabs').classList.toggle('is-hidden', searching);
   $('#search-bar').classList.toggle('is-hidden', !searching);
@@ -764,6 +768,8 @@ function continueListenHTML() {
   const last = store.get('last');
   if (!last || !last.chapters || !last.chapters.length) return '';
   const ch = last.chapters[Math.min(last.index || 0, last.chapters.length - 1)] || {};
+  const total = Number(ch.duration) || 0;
+  const pct = total ? Math.min(100, Math.round((Number(last.position) || 0) / total * 100)) : 0;
   return `<div class="section-title">Продолжить слушать</div>
     <button class="cont-card cont-listen" id="cont-listen">
       ${last.cover ? `<img src="${esc(coverImg(last.cover))}" alt="" referrerpolicy="no-referrer">` : ''}
@@ -820,7 +826,10 @@ async function renderCatalog(cat) {
     state.items = items;
     view.innerHTML = `${continueListenHTML()}<div class="grid">${items.map(cardHTML).join('')}</div>`;
     const cl = $('#cont-listen');
-    if (cl) cl.onclick = () => openSheet();
+    if (cl) cl.onclick = () => {
+      if (player.book) return openSheet();
+      if (loadLast({ autoplay: true })) openSheet();   // плеер был закрыт — поднимаем книгу снова
+    };
     syncPlaying();
     state.ended = items.length < 10;
     restoreScroll(state.route);
@@ -1308,6 +1317,32 @@ function renderBm(id, page) {
   });
 }
 
+/* Заметки к страницам книги */
+const nmAll = id => store.get('nm:' + id) || [];
+function nmSave(id, list) { store.set('nm:' + id, list, 365 * 24 * 3600e3); }
+
+function renderNm(id, page) {
+  const box = $('#nm-list');
+  if (!box) return;
+  const list = nmAll(id);
+  const cnt = $('#nm-count');
+  if (cnt) cnt.textContent = list.length ? String(list.length) : '';
+  const cur = list.find(n => n.page === page);
+  const ta = $('#nm-text');
+  if (ta && document.activeElement !== ta) ta.value = (cur && cur.text) || '';
+  box.classList.toggle('is-empty', !list.length);
+  box.innerHTML = list.map((n, i) => `
+    <button class="bm-item nm-item${n.page === page ? ' is-cur' : ''}" data-i="${i}">
+      <span class="bm-page">стр. ${n.page}</span>
+      <span class="bm-ex">${esc(n.text)}</span>
+    </button>`).join('');
+  box.querySelectorAll('.nm-item').forEach(btn => btn.onclick = () => {
+    const n = list[Number(btn.dataset.i)];
+    if (n.page === page) { const t = $('#nm-text'); if (t) t.focus(); }
+    else go(`rread/${id}/${n.page}`);
+  });
+}
+
 /* Панель настроек чтения */
 let rdPanelOpen = false;
 
@@ -1320,7 +1355,8 @@ function rdPanelHTML() {
   const pct = Math.round(rdSet.scale * 100);
   return `<div class="rd-panel is-hidden" id="rd-panel">
     <div class="rd-panel-head">
-      <span class="rd-panel-title">Настройки чтения</span>
+      <span class="rd-panel-title">Читалка</span>
+      <span class="rd-count" id="rd-page"></span>
       <button class="rd-close" id="rd-panel-close" aria-label="Закрыть">${rdCloseIcon}</button>
     </div>
     <div class="rd-row">
@@ -1345,6 +1381,23 @@ function rdPanelHTML() {
       <span class="rd-row-name">Тема страницы</span>
       ${seg('theme', [['auto', 'Авто'], ['sepia', 'Сепия'], ['light', 'Светлая'], ['dark', 'Тёмная']])}
     </div>
+    <div class="rd-sec">
+      <div class="rd-sec-head">
+        <span class="rd-sec-name">Закладки</span>
+        <button class="rd-mini" id="rd-bm">${bmIcon}<span>Добавить</span><span id="bm-count"></span></button>
+      </div>
+      <div class="bm-list is-empty" id="bm-list"></div>
+    </div>
+    <div class="rd-sec">
+      <div class="rd-sec-head">
+        <span class="rd-sec-name">Заметки</span>
+        <span class="rd-sec-num" id="nm-count"></span>
+      </div>
+      <textarea class="nm-text" id="nm-text" rows="3" placeholder="Заметка к этой странице"></textarea>
+      <button class="rd-save" id="nm-save">Сохранить заметку</button>
+      <div class="bm-list is-empty" id="nm-list"></div>
+    </div>
+    <button class="rd-exit" id="rd-exit">Закрыть книгу</button>
   </div>`;
 }
 
@@ -1356,7 +1409,7 @@ function openRdPanel(on) {
   if (btn) btn.classList.toggle('is-on', !!on);
 }
 
-function wireRdPanel() {
+function wireRdPanel(id) {
   $('#rd-aa').onclick = () => openRdPanel(!rdPanelOpen);
   $('#rd-panel-close').onclick = () => openRdPanel(false);
   $('#rd-scale').oninput = e => {
@@ -1380,6 +1433,31 @@ function wireRdPanel() {
       rdSave();
     });
   });
+  // Закладка на текущем месте страницы
+  $('#rd-bm').onclick = () => {
+    const page = rdView.page;
+    const list = bmAll(id);
+    const at = list.findIndex(bm => bm.page === page && Math.abs(bm.y - window.scrollY) < 200);
+    if (at >= 0) { list.splice(at, 1); toast('Закладка удалена'); }
+    else {
+      list.push({ page, y: window.scrollY, excerpt: readerExcerpt(), ts: Date.now() });
+      list.sort((a, b) => a.page - b.page || a.y - b.y);
+      toast('Закладка добавлена');
+    }
+    bmSave(id, list);
+    renderBm(id, page);
+  };
+  // Заметка к странице
+  $('#nm-save').onclick = () => {
+    const page = rdView.page;
+    const text = ($('#nm-text').value || '').trim();
+    const list = nmAll(id).filter(n => n.page !== page);
+    if (text) { list.push({ page, text, ts: Date.now() }); list.sort((a, b) => a.page - b.page); toast('Заметка сохранена'); }
+    else toast('Заметка удалена');
+    nmSave(id, list);
+    renderNm(id, page);
+  };
+  $('#rd-exit').onclick = () => go('rbook/' + id);
   openRdPanel(rdPanelOpen);
 }
 
@@ -1423,10 +1501,8 @@ function rdSync(page) {
   if (cnt) cnt.textContent = page + ' / ' + rdView.total;
   const bar = $('#rd-pct');
   if (bar) bar.style.width = rdPct(page, rdView.total) + '%';
-  const prev = $('#rd-prev'), next = $('#rd-next');
-  if (prev) prev.disabled = page <= 1;
-  if (next) next.disabled = page >= rdView.total;
   renderBm(rdView.id, page);
+  renderNm(rdView.id, page);
   history.replaceState({}, '', location.pathname + location.search + `#/rread/${rdView.id}/${page}`);
 }
 
@@ -1550,7 +1626,7 @@ async function renderReader(id, page) {
   if (!id) return go('read');
   const seq = ++state.seq;
   state.loading = false;
-  const back = `<div class="back-btn" id="back">${backIcon}К описанию</div>`;
+  const back = `<div class="back-btn" id="back">${backIcon}Назад</div>`;
   view.innerHTML = back + skeletonHTML(1);
   $('#back').onclick = () => go('rbook/' + id);
   try {
@@ -1562,51 +1638,24 @@ async function renderReader(id, page) {
       ? `<h3 class="rd-chap">${esc(b.x)}</h3>`
       : `<p class="rd-p">${esc(b.x)}</p>`).join('');
     const pct = d.total ? Math.min(100, Math.round(d.page / d.total * 100)) : 0;
-    view.innerHTML = `${back}
-      <div class="reader-head">
-        <div class="reader-title">${esc(d.title)}</div>
-        ${d.author ? `<div class="reader-author">${esc(d.author)}</div>` : ''}
-        <div class="rd-progress-line"><i id="rd-pct" style="width:${pct}%"></i></div>
-      </div>
-      <div class="rd-tools">
-        <button class="rd-tool rd-bm" id="rd-bm" aria-label="Закладка">${bmIcon}<span id="bm-count"></span></button>
-        <button class="rd-tool" id="rd-aa" aria-label="Настройки чтения" title="Настройки чтения">Aa</button>
-      </div>
+    // В книге — только текст, тонкая полоса прогресса и одна кнопка настроек.
+    view.innerHTML = `
+      <div class="rd-topline"><i id="rd-pct" style="width:${pct}%"></i></div>
+      <button class="rd-fab" id="rd-aa" aria-label="Настройки чтения" title="Настройки чтения">Aa</button>
       ${rdPanelHTML()}
-      <div class="bm-list is-empty" id="bm-list"></div>
-      <div class="rd-stage" id="rd-stage"><article class="reader rd-page" id="rd-cur">${body || '<p class="rd-p">Страница пуста.</p>'}</article></div>
-      <div class="reader-nav">
-        <button class="rd-btn" id="rd-prev"${d.page <= 1 ? ' disabled' : ''}>Назад</button>
-        <span class="rd-count" id="rd-page">${d.page} / ${d.total}</span>
-        <button class="rd-btn" id="rd-next"${d.page >= d.total ? ' disabled' : ''}>Вперёд</button>
-      </div>`;
+      <div class="rd-stage" id="rd-stage"><article class="reader rd-page" id="rd-cur">${body || '<p class="rd-p">Страница пуста.</p>'}</article></div>`;
     if (d.title) document.title = d.title + ' — Полка';
-    $('#back').onclick = () => go('rbook/' + id);
     rdApply();
     rdPage(true);
     renderBm(id, d.page);
-    wireRdPanel();
+    renderNm(id, d.page);
+    wireRdPanel(id);
     // Контекст листания: кэш страниц живёт, пока открыта та же книга
     if (rdView.id !== id) { rdView.cache.clear(); rdView.id = id; }
     rdView.page = d.page; rdView.total = d.total; rdView.title = d.title; rdView.busy = false;
+    rdSync(d.page);
     bindRdSwipe();
     rdPrefetch();
-    $('#rd-bm').onclick = () => {
-      const page = rdView.page;
-      const list = bmAll(id);
-      const at = list.findIndex(bm => bm.page === page && Math.abs(bm.y - window.scrollY) < 200);
-      if (at >= 0) { list.splice(at, 1); toast('Закладка удалена'); }
-      else {
-        list.push({ page, y: window.scrollY, excerpt: readerExcerpt(), ts: Date.now() });
-        list.sort((a, b) => a.page - b.page || a.y - b.y);
-        toast('Закладка добавлена');
-      }
-      bmSave(id, list);
-      renderBm(id, page);
-    };
-    // Кнопки листают с той же анимацией, что и свайп — без перерисовки экрана
-    $('#rd-prev').onclick = () => rdSlideTo(rdView.page - 1, -1);
-    $('#rd-next').onclick = () => rdSlideTo(rdView.page + 1, 1);
     if (pendingScroll && pendingScroll.id == id) {
       const y = pendingScroll.y;
       pendingScroll = null;
@@ -1667,6 +1716,25 @@ const player = {
 
   seek(sec) { audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + sec)); },
 
+  /* Закрыть аудиокнигу: останавливаем воспроизведение и убираем плеер.
+     Позиция сохраняется — книгу можно продолжить с карточки «Продолжить слушать». */
+  close() {
+    if (!this.book) return;
+    this.persist();
+    const last = store.get('last');
+    if (last) store.set('last', { ...last, closed: true }, 365 * 24 * 3600e3);
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    this.book = null;
+    this.index = 0;
+    this.sheet = false;
+    $('#sheet').classList.add('is-hidden');
+    document.body.classList.remove('sheet-open', 'playing');
+    $('#mini').classList.add('is-hidden');
+    syncPlaying();
+  },
+
   paint() {
     const b = this.book, ch = this.current;
     if (!b || !ch) return;
@@ -1721,16 +1789,24 @@ const player = {
   },
 };
 
-function restoreLast() {
+/* Поднимаем последнюю книгу из сохранения. autoplay — для карточки «Продолжить слушать». */
+function loadLast({ autoplay = false } = {}) {
   const last = store.get('last');
-  if (!last || !last.chapters || !last.chapters.length) return;
+  if (!last || !last.chapters || !last.chapters.length) return false;
   player.book = { slug: last.slug, title: last.title, cover: last.cover, readers: last.readers || [], authors: [], chapters: last.chapters };
   player.index = Math.min(Math.max(0, last.index || 0), last.chapters.length - 1);
   audio.src = player.current.url;
   if (last.position > 5) audio.addEventListener('loadedmetadata', () => { audio.currentTime = last.position; }, { once: true });
   player.paint();
-  $('#mini').classList.remove('is-hidden');
   document.body.classList.remove('playing');
+  if (autoplay) audio.play().catch(() => {});
+  return true;
+}
+
+function restoreLast() {
+  const last = store.get('last');
+  if (!last || last.closed) return;   // плеер закрыт вручную — не показываем
+  loadLast();
 }
 
 /* --- события аудио --- */
@@ -1787,6 +1863,7 @@ $('#sheet-seek').addEventListener('change', () => {
 /* --- управление --- */
 
 $('#mini-play').onclick = e => { e.stopPropagation(); player.toggle(); };
+$('#mini-close').onclick = e => { e.stopPropagation(); player.close(); };
 $('#mini-open').onclick = () => openSheet();
 $('#ctrl-play').onclick = () => player.toggle();
 $('#ctrl-prev').onclick = () => player.prev();
