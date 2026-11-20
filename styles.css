@@ -581,20 +581,6 @@ body.playing .ctrl-main{animation:pulse 2.6s ease-in-out infinite}
 .search-mode:active{transform:scale(.96)}
 .search-mode.is-active{color:var(--ink-fg);background:var(--grad);box-shadow:var(--glow);border-color:transparent}
 
-/* Результаты поиска книг для чтения */
-.sr-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
-.sr-row{
-  display:flex;flex-direction:column;gap:3px;text-align:left;
-  padding:12px 14px;border-radius:14px;background:var(--surface);
-  border:1px solid var(--line-soft);transition:transform .16s ease;
-}
-.sr-row:active{transform:scale(.985)}
-.sr-title{font-size:14.5px;font-weight:680;color:var(--text);line-height:1.3}
-.sr-sub{
-  font-size:12.5px;color:var(--muted);line-height:1.45;
-  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
-}
-
 /* Скрытый встроенный поиск — держим вне экрана, показываем своими карточками */
 .cse-hidden{position:absolute;left:-9999px;top:0;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none}
 .search-field{

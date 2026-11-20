@@ -95,6 +95,12 @@ const store = {
 const MEDIA_CACHE = 'polka-media';
 const DATA_CACHE = 'polka-data';
 
+/* Ключ страницы читалки в офлайн-кэше. Он обязан быть обычным URL-путём:
+   строку вида «off:lrpage:1:1» браузер разбирает как URL со схемой «off»
+   и отказывается её кэшировать. */
+const offPageKey = (id, p) => new URL(`./off/lrpage/${id}/${p}`, location.href).href;
+const offPagePrefix = id => new URL(`./off/lrpage/${id}/`, location.href).href;
+
 async function cachePutText(name, key, text) {
   try {
     const c = await caches.open(name);
@@ -443,7 +449,7 @@ async function apiLrPage(id, page = 1) {
   const key = `lr:page:${id}:${page}`;
   const hit = store.get(key);
   if (hit) return hit;
-  const off = await cacheGetText(DATA_CACHE, `off:lrpage:${id}:${page}`);   // скачано для офлайна
+  const off = await cacheGetText(DATA_CACHE, offPageKey(id, page));   // скачано для офлайна
   if (off) {
     const data = parseLrPage(off);
     if (data.blocks.length) { store.set(key, data, TTL.lrpage); return data; }
@@ -491,7 +497,7 @@ const dl = {
       .filter(k => k.startsWith('polka:dl:'))
       .map(k => {
         const id = k.slice('polka:dl:'.length);
-        if (id.startsWith('r')) return null;                       // это читалка, не аудио
+        if (/^r\d+$/.test(id)) return null;                       // это читалка, не аудио
         const m = store.getStale('dl:' + id);
         if (!m || m.status !== 'done') return null;
         const b = m.book || store.getStale('book:' + id);
@@ -501,6 +507,28 @@ const dl = {
           slug: b.slug || id,
           author: b.author || (b.authors && b.authors[0]) || '',
           reader: b.reader || (b.readers && b.readers[0]) || '',
+        };
+      })
+      .filter(Boolean);
+  },
+
+  // Скачанные для чтения книги (для вкладок «Офлайн» и «Библиотека»).
+  offlineReadList() {
+    return Object.keys(localStorage)
+      .filter(k => /^polka:dl:r\d+$/.test(k))
+      .map(k => {
+        const id = k.slice('polka:dl:r'.length);
+        const m = store.getStale('dl:r' + id);
+        if (!m || m.status !== 'done') return null;
+        const b = m.book || {};
+        if (!b.title) return null;
+        return {
+          id,
+          title: b.title,
+          author: b.author || '',
+          cover: b.cover || '',
+          genre: (b.genres && b.genres[0]) || '',
+          time: b.readTime || '',
         };
       })
       .filter(Boolean);
@@ -534,46 +562,52 @@ const dl = {
     } finally { this.task = null; this.paint(); }
   },
 
-  async reader(id, title) {
+  async reader(id, book) {
     if (this.busy()) return toast('Уже идёт другая загрузка');
+    const title = (book && book.title) || '';
     const prev = this.meta('r' + id) || {};
     if (prev.status === 'done') return;
     const t = this.task = { id: 'r' + id, title, kind: 'read', total: prev.total || 1, done: prev.done || 0, t0: Date.now(), cancel: false };
     this.paint();
+    const meta = status => ({
+      status, total: t.total, done: t.done, title, kind: 'read',
+      book: book ? { id, title: book.title, author: book.author, cover: book.cover, genres: book.genres, readTime: book.readTime } : (prev.book || null),
+    });
     try {
-      if (!t.total || t.total <= 1 && !t.done) {
+      if (t.total <= 1 && !t.done) {
         const first = await fetchText(`${SRC_READ}/read_book.php?id=${id}&p=1`);
-        await cachePutText(DATA_CACHE, `off:lrpage:${id}:1`, first);
+        if (!await cachePutText(DATA_CACHE, offPageKey(id, 1), first)) throw new Error('quota');
         t.total = parseLrPage(first).total || 1;
-        t.done = Math.max(t.done, 1);
+        t.done = 1;
         this.paint();
       }
       for (let p = t.done + 1; p <= t.total; p++) {
         if (t.cancel) break;
         const html = await fetchText(`${SRC_READ}/read_book.php?id=${id}&p=${p}`);
-        if (!await cachePutText(DATA_CACHE, `off:lrpage:${id}:${p}`, html)) throw new Error('quota');
+        if (!await cachePutText(DATA_CACHE, offPageKey(id, p), html)) throw new Error('quota');
         t.done = p;
         this.paint();
         await sleep(500);   // бережём лимиты шлюза
       }
       const status = t.cancel ? 'paused' : 'done';
-      store.set('dl:' + t.id, { status, total: t.total, done: t.done }, 365 * 24 * 3600e3);
+      store.set('dl:' + t.id, meta(status), 365 * 24 * 3600e3);
       toast(status === 'done' ? 'Готово — можно читать без сети' : 'Загрузка остановлена');
     } catch {
-      store.set('dl:' + t.id, { status: 'paused', total: t.total, done: t.done }, 365 * 24 * 3600e3);
-      toast('Загрузка не удалась — возможно, мало места');
+      store.set('dl:' + t.id, meta('paused'), 365 * 24 * 3600e3);
+      toast('Загрузка не удалась — проверьте связь и попробуйте ещё раз');
     } finally { this.task = null; this.paint(); }
   },
 
   async remove(id, urls) {
     try {
-      const name = id.startsWith('r') ? DATA_CACHE : MEDIA_CACHE;
+      const name = /^r\d+$/.test(id) ? DATA_CACHE : MEDIA_CACHE;
       const c = await caches.open(name);
       if (urls) await Promise.all(urls.map(u => c.delete(u)));
       else {
         const bookId = id.replace(/^r/, '');
         const keys = await c.keys();
-        await Promise.all(keys.map(k => String(k.url).includes('off:lrpage:' + bookId + ':') && c.delete(k)));
+        const prefix = offPagePrefix(bookId);
+        await Promise.all(keys.map(k => String(k.url).startsWith(prefix) && c.delete(k)));
       }
     } catch {}
     localStorage.removeItem('polka:dl:' + id);
@@ -810,8 +844,8 @@ function continueListenHTML() {
     </button>`;
 }
 
-function continueReadHTML(title = 'Продолжить чтение', limit = 4) {
-  const items = startedReadItems(limit);
+function continueReadHTML(title = 'Продолжить чтение', limit = 4, exclude = null) {
+  const items = startedReadItems(limit, exclude);
   if (!items.length) return '';
   return `<div class="section-title">${esc(title)}</div>
     <div class="cont-grid">${items.map(v => {
@@ -825,11 +859,11 @@ function continueReadHTML(title = 'Продолжить чтение', limit = 4
 }
 
 /* Начатые книги для чтения — свежие сверху. */
-function startedReadItems(limit = 4) {
+function startedReadItems(limit = 4, exclude = null) {
   return Object.keys(localStorage)
     .filter(k => k.startsWith('polka:lr:pos:'))
     .map(k => { try { const r = JSON.parse(localStorage.getItem(k)); return { id: k.slice('polka:lr:pos:'.length), e: r.e, ...r.d }; } catch { return null; } })
-    .filter(v => v && v.title && v.p > 1)
+    .filter(v => v && v.title && v.p > 1 && !(exclude && exclude.has(v.id)))
     .sort((a, b) => b.e - a.e)
     .slice(0, limit);
 }
@@ -893,7 +927,7 @@ function offlineGridHTML(list) {
 }
 
 function bindOfflineDel(list, refresh) {
-  $$('.ocard-del').forEach(btn => btn.onclick = async e => {
+  $$('.ocard-del[data-del]').forEach(btn => btn.onclick = async e => {
     e.preventDefault(); e.stopPropagation();
     const slug = btn.dataset.del;
     const book = list.find(x => x.slug === slug);
@@ -906,6 +940,26 @@ function bindOfflineDel(list, refresh) {
   });
 }
 
+/* Сетка скачанных книг для чтения — те же карточки, что и в каталоге. */
+function offlineReadGridHTML(list) {
+  return `<div class="grid">${list.map((b, i) => `
+    <div class="ocard">
+      ${readerCardHTML(b, i)}
+      <button class="ocard-del" data-rdel="${esc(b.id)}" aria-label="Удалить из офлайна" title="Удалить из офлайна">${trashIcon}</button>
+    </div>`).join('')}</div>`;
+}
+
+function bindOfflineReadDel(list, refresh) {
+  $$('.ocard-del[data-rdel]').forEach(btn => btn.onclick = async e => {
+    e.preventDefault(); e.stopPropagation();
+    const id = btn.dataset.rdel;
+    const book = list.find(x => x.id === id);
+    if (!confirm(`Удалить «${(book && book.title) || id}» из офлайна?`)) return;
+    await dl.remove('r' + id, null);
+    refresh();
+  });
+}
+
 function renderOffline() {
   ++state.seq;                 // отменяем незавершённые загрузки предыдущего экрана
   state.cat = 'offline';
@@ -914,16 +968,20 @@ function renderOffline() {
   state.ended = true;          // вкладка без пагинации
   state.loading = false;
   clearTail();
-  const list = dl.offlineList();
-  if (!list.length) {
+  const audio = dl.offlineList();
+  const books = dl.offlineReadList();
+  if (!audio.length && !books.length) {
     view.innerHTML = stateHTML(
       'Пока пусто',
-      'Откройте аудиокнигу и нажмите «Скачать для офлайна» — она появится здесь и будет доступна без интернета.'
+      'Откройте книгу и нажмите «Скачать для офлайна» — она появится здесь и будет доступна без интернета.'
     );
     return;
   }
-  view.innerHTML = `<div class="section-title">Слушать офлайн</div>${offlineGridHTML(list)}`;
-  bindOfflineDel(list, renderOffline);
+  view.innerHTML =
+    (audio.length ? `<div class="section-title">Слушать офлайн</div>${offlineGridHTML(audio)}` : '') +
+    (books.length ? `<div class="section-title">Читать офлайн</div>${offlineReadGridHTML(books)}` : '');
+  bindOfflineDel(audio, renderOffline);
+  bindOfflineReadDel(books, renderOffline);
   syncPlaying();
 }
 
@@ -968,13 +1026,19 @@ function renderLib() {
   state.loading = false;
   clearTail();
   const list = dl.offlineList();
-  const read = continueReadHTML('Начатое', 8);
-  if (!list.length && !read) {
+  const books = dl.offlineReadList();
+  const started = books.length ? new Set(books.map(b => b.id)) : null;
+  const read = continueReadHTML('Начатое', 8, started);
+  if (!list.length && !books.length && !read) {
     view.innerHTML = stateHTML('Библиотека пуста', 'Скачанные для офлайна и начатые книги появятся здесь.');
     return;
   }
-  view.innerHTML = (list.length ? `<div class="section-title">Скачано · ${list.length}</div>${offlineGridHTML(list)}` : '') + read;
+  view.innerHTML =
+    (list.length ? `<div class="section-title">Аудиокниги · ${list.length}</div>${offlineGridHTML(list)}` : '') +
+    (books.length ? `<div class="section-title">Книги для чтения · ${books.length}</div>${offlineReadGridHTML(books)}` : '') +
+    read;
   bindOfflineDel(list, renderLib);
+  bindOfflineReadDel(books, renderLib);
   bindContinueRead();
   syncPlaying();
 }
@@ -1111,6 +1175,24 @@ function loadCSE() {
   return csePromise;
 }
 
+// Заголовок из выдачи — это заголовок веб-страницы, а не название книги:
+// там попадаются «страница 25», «Оглавление книги», «биография и список книг»
+// и название источника. Оставляем только похожее на название книги.
+function cleanCseTitle(t) {
+  let s = String(t || '');
+  s = s.replace(/Love[-\s]?Read(\.ec|\.ru|\.net)?/gi, ' ');   // упоминания источника
+  s = s.replace(/[|·–—-]\s*(биография и список книг|Онлайн книги автора|Книги автора|Все книги|Читать онлайн|Читать бесплатно)[^|]{0,40}$/i, ' ');
+  s = s.replace(/^Оглавление\s+книги\s*[«"“]?\s*/i, '');
+  s = s.replace(/[,;:.\-–—]\s*страница\s*\d+\s*$/i, '');
+  s = s.replace(/[,;:.\-–—\s]*\bАвтор\s*[-–—:]?[^,|]{0,40}$/i, ' ');
+  s = s.replace(/^Книга\s+/i, '');
+  s = s.replace(/[«»"“”]/g, ' ');
+  s = s.replace(/\s*[|·]\s*$/,'');
+  s = s.replace(/\s{2,}/g, ' ').trim();
+  s = s.replace(/[-–—,.|:;\s]+$/, '').trim();
+  return s;
+}
+
 // Достаём из выдачи ссылки на книги источника и превращаем их в список.
 function cseScrape() {
   const host = $('#cse-hidden');
@@ -1125,7 +1207,7 @@ function cseScrape() {
     seen.add(id);
     const block = a.closest('.gsc-webResult, .gsc-result, .gs-result') || a.parentElement;
     const snippet = ((block && block.querySelector('.gs-snippet')?.textContent) || '').replace(/\s+/g, ' ').trim();
-    const title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+    const title = cleanCseTitle(a.textContent);
     if (title) out.push({ id, title, snippet });
   });
   return out;
@@ -1165,6 +1247,56 @@ async function openSearch(q) {
 }
 
 /* Поиск книг для чтения (режим «Читать») */
+/* Уточняем найденные книги у источника: у поисковой выдачи нет ни обложек,
+   ни авторов. Догружаем их в фоне (по несколько сразу) и по мере готовности
+   подставляем в уже отрисованные карточки. */
+async function enrichReadItems(raw, seq) {
+  const items = raw.slice(0, 24);
+  let idx = 0;
+  const worker = async () => {
+    while (idx < items.length) {
+      const b = items[idx++];
+      if (seq !== state.seq) return;
+      try {
+        const d = await apiLrDetail(b.id);
+        if (seq !== state.seq) return;
+        if (d && d.title) patchReadCard(b.id, {
+          id: b.id,
+          title: d.title,
+          author: d.author || '',
+          cover: d.cover || '',
+          genre: (d.genres && d.genres[0]) || '',
+          time: d.readTime || '',
+        });
+      } catch {}
+      await sleep(120);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(5, items.length) }, worker));
+}
+
+/* Подставляем уточнённые данные в карточку, не перерисовывая сетку. */
+function patchReadCard(id, b) {
+  const card = view.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+  if (!card) return;
+  if (b.cover) {
+    const cover = card.querySelector('.cover');
+    if (cover && !cover.querySelector('img')) {
+      const img = document.createElement('img');
+      img.src = lrCover(b.cover);
+      img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
+      img.referrerPolicy = 'no-referrer';
+      cover.insertBefore(img, cover.firstChild);
+    }
+  }
+  if (b.title) {
+    const t = card.querySelector('.card-title');
+    if (t) t.textContent = b.title;
+  }
+  const sub = card.querySelector('.card-sub');
+  if (sub && b.author) sub.textContent = b.author;
+}
+
 async function runReadSearch(q, seq) {
   try {
     const items = await cseSearch(q);
@@ -1177,12 +1309,8 @@ async function runReadSearch(q, seq) {
     state.items = items;
     state.ended = true;
     view.innerHTML = `<div class="section-title">Читать · найдено: ${items.length}</div>
-      <div class="sr-list">${items.map((b, i) => `
-        <button class="sr-row" style="--i:${i}" data-id="${esc(b.id)}">
-          <span class="sr-title">${esc(b.title)}</span>
-          ${b.snippet ? `<span class="sr-sub">${esc(b.snippet)}</span>` : ''}
-        </button>`).join('')}</div>`;
-    $$('.sr-row').forEach(el => el.onclick = () => go('rbook/' + el.dataset.id));
+      <div class="grid">${items.map((b, i) => readerCardHTML({ id: b.id, title: b.title }, i)).join('')}</div>`;
+    enrichReadItems(items, seq);          // обложки и авторы подтягиваются по ходу
   } catch (e) {
     if (seq !== state.seq) return;
     view.innerHTML = stateHTML('Ошибка', errorText(e), { label: 'Повторить' });
@@ -1476,7 +1604,7 @@ async function renderReadBook(id) {
         renderReadBook(id);
       } else {
         dlBtn.disabled = true;
-        await dl.reader(id, b.title);
+        await dl.reader(id, b);
         if (state.route === 'rbook/' + id) renderReadBook(id);
       }
     };
