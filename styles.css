@@ -35,6 +35,7 @@
   --r-sm:12px;
   --topbar-h:60px;
   --mini-h:74px;
+  --tabbar-h:64px;
   --sat:env(safe-area-inset-top,0px);
   --sab:env(safe-area-inset-bottom,0px);
   --ring:0 0 0 1px rgba(0,0,0,.06);
@@ -143,34 +144,57 @@ svg{width:22px;height:22px;display:block}
 #btn-mode .i-head,#btn-mode .i-book{display:none}
 body[data-mode="listen"] #btn-mode .i-book{display:block}
 body[data-mode="read"] #btn-mode .i-head{display:block}
-body[data-mode="listen"] .tab[data-m="read"]{display:none}
-body[data-mode="read"] .tab[data-m="listen"]{display:none}
+body[data-mode="listen"] .chip-tab[data-m="read"]{display:none}
+body[data-mode="read"] .chip-tab[data-m="listen"]{display:none}
+/* Без интернета лишнее не нужно: остаётся только офлайн-режим */
+body.is-offline #btn-search,body.is-offline #btn-mode{display:none}
 
-/* ---------- 4. Шапка навигации: табы и поиск ---------- */
+/* ---------- 4. Шапка навигации: чипы и поиск ---------- */
 .headbar{
   position:sticky;top:calc(var(--topbar-h) + var(--sat));z-index:39;
   padding:2px 16px 12px;
   background:color-mix(in srgb,var(--bg) 74%,transparent);
   backdrop-filter:saturate(120%) blur(22px);-webkit-backdrop-filter:saturate(120%) blur(22px);
 }
-.tabs{
-  display:flex;gap:5px;padding:5px;
-  background:color-mix(in srgb,var(--surface-solid) 62%,transparent);
-  border:1px solid var(--line-soft);border-radius:16px;
-  backdrop-filter:blur(16px) saturate(120%);-webkit-backdrop-filter:blur(16px) saturate(120%);
-  overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;
+.nav-chips{
+  display:flex;flex-wrap:nowrap;gap:8px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;
+  padding:2px 0;
 }
-.tabs::-webkit-scrollbar{display:none}
-.tab{
-  flex:1 1 auto;padding:9px 8px;border-radius:12px;text-align:center;
-  font-size:13px;font-weight:640;color:var(--muted);white-space:nowrap;
+.nav-chips::-webkit-scrollbar{display:none}
+.chip-tab{
+  flex:none;padding:8px 15px;border-radius:999px;white-space:nowrap;
+  font-size:13px;font-weight:640;color:var(--muted);
+  background:color-mix(in srgb,var(--surface-solid) 62%,transparent);
+  border:1px solid var(--line-soft);
   transition:color .2s ease,background .3s ease,box-shadow .3s ease,transform .18s ease;
 }
-.tab:active{transform:scale(.96)}
-.tab.is-active{color:var(--ink-fg);background:var(--grad);box-shadow:var(--glow)}
+.chip-tab:active{transform:scale(.96)}
+.chip-tab.is-active{color:var(--ink-fg);background:var(--grad);box-shadow:var(--glow);border-color:transparent}
+
+/* ---------- 4.1 Нижний таб-бар ---------- */
+.tabbar{
+  position:fixed;left:0;right:0;bottom:0;z-index:55;
+  display:flex;align-items:stretch;
+  padding:6px 8px calc(6px + var(--sab));
+  background:color-mix(in srgb,var(--bg) 82%,transparent);
+  backdrop-filter:saturate(120%) blur(22px);-webkit-backdrop-filter:saturate(120%) blur(22px);
+  border-top:1px solid var(--line-soft);
+}
+.tabbar-btn{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  padding:5px 4px;border-radius:14px;color:var(--muted);
+  transition:color .2s ease,background .25s ease,transform .16s ease;
+}
+.tabbar-btn:active{transform:scale(.94)}
+.tabbar-btn svg{width:23px;height:23px}
+.tabbar-btn .tabbar-label{font-size:10.5px;font-weight:600;letter-spacing:-.01em}
+.tabbar-btn.is-active{color:var(--accent)}
+body:not(.is-offline) .tabbar-btn[data-tab="offline"]{display:none}
+body.is-offline .tabbar-btn:not([data-tab="offline"]){display:none}
+body.is-offline .tabbar-btn[data-tab="offline"]{color:var(--ink-fg);background:var(--grad);box-shadow:var(--glow)}
 
 /* ---------- 5. Контент ---------- */
-.view{padding:4px 16px calc(30px + var(--mini-h) + var(--sab))}
+.view{padding:4px 16px calc(28px + var(--tabbar-h) + var(--mini-h) + var(--sab))}
 .section-title{
   font-size:12.5px;font-weight:720;letter-spacing:.09em;text-transform:uppercase;
   color:var(--muted);margin:22px 2px 12px;
@@ -346,7 +370,7 @@ body[data-mode="read"] .tab[data-m="listen"]{display:none}
 
 /* ---------- 10. Мини-плеер ---------- */
 .mini{
-  position:fixed;left:12px;right:12px;bottom:calc(12px + var(--sab));z-index:50;
+  position:fixed;left:12px;right:12px;bottom:calc(var(--tabbar-h) + 8px + var(--sab));z-index:50;
   max-width:560px;margin-left:auto;margin-right:auto;
   background:color-mix(in srgb,var(--surface-solid) 76%,transparent);
   border:1px solid var(--line);border-radius:20px;
@@ -581,7 +605,7 @@ body.playing .ctrl-main{animation:pulse 2.6s ease-in-out infinite}
 }
 @keyframes spin{to{transform:rotate(360deg)}}
 .to-top{
-  position:fixed;right:14px;bottom:calc(var(--mini-h) + 28px + var(--sab));z-index:45;
+  position:fixed;right:14px;bottom:calc(var(--tabbar-h) + var(--mini-h) + 24px + var(--sab));z-index:45;
   width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:var(--text);
   background:color-mix(in srgb,var(--surface-solid) 80%,transparent);
   border:1px solid var(--line);box-shadow:var(--shadow-m);
@@ -589,7 +613,7 @@ body.playing .ctrl-main{animation:pulse 2.6s ease-in-out infinite}
 }
 .to-top:active{transform:scale(.9)}
 .toast{
-  position:fixed;left:50%;bottom:calc(var(--mini-h) + 28px + var(--sab));z-index:70;
+  position:fixed;left:50%;bottom:calc(var(--tabbar-h) + var(--mini-h) + 28px + var(--sab));z-index:70;
   transform:translate(-50%,16px);opacity:0;pointer-events:none;
   padding:12px 20px;border-radius:14px;font-size:13.5px;font-weight:560;
   background:var(--ink);color:var(--ink-fg);box-shadow:var(--shadow-l);
@@ -773,7 +797,7 @@ body[data-rd-page]::before,
 .rd-fab.is-on{color:var(--ink-fg);background:var(--ink);border-color:transparent}
 body.is-reader .view{padding-top:calc(var(--sat) + 22px);padding-bottom:calc(96px + var(--sab))}
 body.is-reader .rd-stage{max-width:var(--rd-w);margin-inline:auto}
-body.is-reader .mini,body.is-reader .to-top{display:none !important}
+body.is-reader .mini,body.is-reader .to-top,body.is-reader .tabbar{display:none !important}
 
 /* Карточки «Продолжить» */
 .cont-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}

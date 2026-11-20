@@ -39,14 +39,13 @@
 </header>
 
 <div class="headbar" id="headbar">
-  <nav class="tabs" id="tabs">
-    <button class="tab" data-m="listen" data-cat="new">Новинки</button>
-    <button class="tab" data-m="listen" data-cat="popular">Популярное</button>
-    <button class="tab" data-m="listen" data-cat="rating">Рейтинг</button>
-    <button class="tab" data-m="listen" data-cat="genres">Жанры</button>
-    <button class="tab" data-m="listen" data-cat="offline">Офлайн</button>
-    <button class="tab" data-m="read" data-cat="new">Новинки</button>
-    <button class="tab" data-m="read" data-cat="genres">Жанры</button>
+  <nav class="nav-chips" id="chips">
+    <button class="chip-tab" data-m="listen" data-cat="new">Новинки</button>
+    <button class="chip-tab" data-m="listen" data-cat="popular">Популярное</button>
+    <button class="chip-tab" data-m="listen" data-cat="rating">Рейтинг</button>
+    <button class="chip-tab" data-m="listen" data-cat="genres">Жанры</button>
+    <button class="chip-tab" data-m="read" data-cat="new">Новинки</button>
+    <button class="chip-tab" data-m="read" data-cat="genres">Жанры</button>
   </nav>
 
   <div class="search-bar is-hidden" id="search-bar">
@@ -66,6 +65,26 @@
 <button class="to-top" id="to-top" hidden aria-label="Наверх">
   <svg viewBox="0 0 24 24" fill="none"><path d="M17.6568 8.96219L16.2393 10.3731L12.9843 7.10285L12.9706 20.7079L10.9706 20.7059L10.9843 7.13806L7.75404 10.3532L6.34314 8.93572L12.0132 3.29211L17.6568 8.96219Z" fill="currentColor"/></svg>
 </button>
+
+<!-- Нижний таб-бар -->
+<nav class="tabbar" id="tabbar" aria-label="Навигация">
+  <button class="tabbar-btn" data-tab="cat" aria-label="Каталог">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M4 5.2h6v6.3H4zM14 5.2h6v6.3h-6zM4 12.9h6v6.3H4zM14 12.9h6v6.3h-6z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+    <span class="tabbar-label">Каталог</span>
+  </button>
+  <button class="tabbar-btn" data-tab="my" aria-label="Мои книги">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-3.4L6 20V5a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+    <span class="tabbar-label">Мои книги</span>
+  </button>
+  <button class="tabbar-btn" data-tab="lib" aria-label="Библиотека">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M12 3.6 3.6 8 12 12.4 20.4 8z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M3.6 12 12 16.4 20.4 12M3.6 16 12 20.4 20.4 16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span class="tabbar-label">Библиотека</span>
+  </button>
+  <button class="tabbar-btn" data-tab="offline" aria-label="Офлайн">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M12 13V4m0 9-3.2-3.2M12 13l3.2-3.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 15.5v2A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5v-2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M4 4l16 16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    <span class="tabbar-label">Офлайн</span>
+  </button>
+</nav>
 
 <!-- Мини-плеер -->
 <div class="mini is-hidden" id="mini">

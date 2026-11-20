@@ -654,21 +654,28 @@ function route() {
   const searching = head === 'search';
   const detail = head === 'book' || head === 'rbook' || head === 'rread';
   const reader = head === 'rread';
-  applyMode(READ_HEADS.includes(head) ? 'read' : 'listen');
+  const offline = document.body.classList.contains('is-offline');
+  const isCat = head === 'cat' || head === 'genres' || head === 'genre';
+  // На «Мои книги» и «Библиотеку» режим не переключаем — там и аудио, и тексты.
+  if (head !== 'my' && head !== 'lib') applyMode(READ_HEADS.includes(head) ? 'read' : 'listen');
   rdPage(reader);   // тема страницы — только в читалке
   // В читалке не должно быть ничего лишнего: только текст и кнопка настроек.
   document.body.classList.toggle('is-reader', reader);
   $('#topbar').classList.toggle('is-hidden', reader);
-  $('#headbar').classList.toggle('is-hidden', detail);
-  $('#tabs').classList.toggle('is-hidden', searching);
+  $('#headbar').classList.toggle('is-hidden', detail || reader || offline || !(isCat || searching));
+  $('#tabbar').classList.toggle('is-hidden', detail || reader);
+  $('#chips').classList.toggle('is-hidden', searching);
   $('#search-bar').classList.toggle('is-hidden', !searching);
   markTab(head, parts[1]);
+  markTabbar(head, parts[1], offline);
 
   if (head === 'cat') return parts[1] === 'offline' ? renderOffline() : renderCatalog(parts[1] || 'new');
   if (head === 'genres') return renderGenres();
   if (head === 'genre') return renderGenre(parts[1], parts[2] || '');
   if (head === 'search') return openSearch(q.get('q') || '');
   if (head === 'book') return renderBook(parts[1]);
+  if (head === 'my') return renderMy();
+  if (head === 'lib') return renderLib();
   if (head === 'read') return renderReadList();
   if (head === 'rgenres') return renderReadGenres();
   if (head === 'rgenre') return renderReadGenre(parts[1], decodeURIComponent(parts[2] || ''));
@@ -687,18 +694,44 @@ function applyMode(mode) {
 
 function markTab(head, param) {
   const mode = document.body.dataset.mode || 'listen';
-  $$('.tab').forEach(t => {
+  $$('.chip-tab').forEach(t => {
     let on = false;
     if (t.dataset.m === mode) {
       const cat = t.dataset.cat;
       on = mode === 'listen'
         ? (cat === 'genres' && (head === 'genres' || head === 'genre'))
           || (head === 'cat' && cat === (param || 'new'))
-        : (cat === 'new' && (head === 'read' || head === 'rgenre'))
+        : (cat === 'new' && head === 'read')
           || (cat === 'genres' && (head === 'rgenres' || head === 'rgenre'));
     }
     t.classList.toggle('is-active', on);
   });
+}
+
+/* Активный пункт нижнего таб-бара. Без интернета активен только «Офлайн». */
+function markTabbar(head, param, offline) {
+  let key = 'cat';
+  if (offline) key = 'offline';
+  else if (head === 'my') key = 'my';
+  else if (head === 'lib') key = 'lib';
+  $$('.tabbar-btn').forEach(b => b.classList.toggle('is-active', b.dataset.tab === key));
+}
+
+/* Офлайн-режим: без сети остаётся только «Офлайн» и приложение переходит туда. */
+function netUpdate() {
+  const off = !navigator.onLine;
+  document.body.classList.toggle('is-offline', off);
+  const { parts } = parseHash();
+  const head = parts[0] || '';
+  const main = ['', 'cat', 'genres', 'genre', 'search', 'my', 'lib'].includes(head);
+  if (off) {
+    if (main) go('cat/offline', { replace: true });
+    else route();                       // обновляем таб-бар, не срывая чтение книги
+  } else if (head === 'cat' && parts[1] === 'offline') {
+    go('cat/new');                      // сеть вернулась — уходим с офлайн-экрана
+  } else {
+    route();
+  }
 }
 
 /* ---------- 9. Отрисовка ---------- */
@@ -779,15 +812,10 @@ function continueListenHTML() {
     </button>`;
 }
 
-function continueReadHTML() {
-  const items = Object.keys(localStorage)
-    .filter(k => k.startsWith('polka:lr:pos:'))
-    .map(k => { try { const r = JSON.parse(localStorage.getItem(k)); return { id: k.slice('polka:lr:pos:'.length), e: r.e, ...r.d }; } catch { return null; } })
-    .filter(v => v && v.title && v.p > 1)
-    .sort((a, b) => b.e - a.e)
-    .slice(0, 4);
+function continueReadHTML(title = 'Продолжить чтение', limit = 4) {
+  const items = startedReadItems(limit);
   if (!items.length) return '';
-  return `<div class="section-title">Продолжить чтение</div>
+  return `<div class="section-title">${esc(title)}</div>
     <div class="cont-grid">${items.map(v => {
       const pct = v.t ? Math.min(100, Math.round(v.p / v.t * 100)) : 0;
       return `<button class="cont-card" data-id="${esc(v.id)}" data-p="${v.p}">
@@ -796,6 +824,16 @@ function continueReadHTML() {
         <span class="cont-bar"><i style="width:${pct}%"></i></span>
       </button>`;
     }).join('')}</div>`;
+}
+
+/* Начатые книги для чтения — свежие сверху. */
+function startedReadItems(limit = 4) {
+  return Object.keys(localStorage)
+    .filter(k => k.startsWith('polka:lr:pos:'))
+    .map(k => { try { const r = JSON.parse(localStorage.getItem(k)); return { id: k.slice('polka:lr:pos:'.length), e: r.e, ...r.d }; } catch { return null; } })
+    .filter(v => v && v.title && v.p > 1)
+    .sort((a, b) => b.e - a.e)
+    .slice(0, limit);
 }
 
 function bindContinueRead() {
@@ -844,6 +882,31 @@ async function renderCatalog(cat) {
 /* ---------- 10.5 Слушать офлайн ---------- */
 /* Показываем только книги, целиком скачанные для прослушивания без интернета. */
 
+const trashIcon = '<svg viewBox="0 0 24 24" fill="none"><path d="M6 7h12M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7m-6 0 .8 12.1A1.9 1.9 0 0 0 10.7 21h2.6a1.9 1.9 0 0 0 1.9-1.9L16 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+/* Сетка скачанных аудиокниг с кнопкой удаления на каждой. */
+function offlineGridHTML(list) {
+  return `<div class="grid">${list.map((b, i) => `
+    <div class="ocard">
+      ${cardHTML(b, i)}
+      <button class="ocard-del" data-del="${esc(b.slug)}" aria-label="Удалить из офлайна" title="Удалить из офлайна">${trashIcon}</button>
+    </div>`).join('')}</div>`;
+}
+
+function bindOfflineDel(list, refresh) {
+  $$('.ocard-del').forEach(btn => btn.onclick = async e => {
+    e.preventDefault(); e.stopPropagation();
+    const slug = btn.dataset.del;
+    const book = list.find(x => x.slug === slug);
+    if (!confirm(`Удалить «${(book && book.title) || slug}» из офлайна?`)) return;
+    const saved = dl.offlineBook(slug) || book;
+    const urls = saved && saved.chapters ? saved.chapters.map(c => c.url) : null;
+    if (player.book && player.book.slug === slug) player.close();
+    await dl.remove(slug, urls);
+    refresh();
+  });
+}
+
 function renderOffline() {
   ++state.seq;                 // отменяем незавершённые загрузки предыдущего экрана
   state.cat = 'offline';
@@ -860,25 +923,60 @@ function renderOffline() {
     );
     return;
   }
-  view.innerHTML = `<div class="section-title">Слушать офлайн</div>
-    <div class="grid">${list.map((b, i) => `
-      <div class="ocard">
-        ${cardHTML(b, i)}
-        <button class="ocard-del" data-del="${esc(b.slug)}" aria-label="Удалить из офлайна" title="Удалить из офлайна">
-          <svg viewBox="0 0 24 24" fill="none"><path d="M6 7h12M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7m-6 0 .8 12.1A1.9 1.9 0 0 0 10.7 21h2.6a1.9 1.9 0 0 0 1.9-1.9L16 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-      </div>`).join('')}</div>`;
-  $$('.ocard-del').forEach(btn => btn.onclick = async e => {
-    e.preventDefault(); e.stopPropagation();
-    const slug = btn.dataset.del;
-    const book = list.find(x => x.slug === slug);
-    if (!confirm(`Удалить «${(book && book.title) || slug}» из офлайна?`)) return;
-    const saved = dl.offlineBook(slug) || book;
-    const urls = saved && saved.chapters ? saved.chapters.map(c => c.url) : null;
-    if (player.book && player.book.slug === slug) player.close();
-    await dl.remove(slug, urls);
-    renderOffline();
-  });
+  view.innerHTML = `<div class="section-title">Слушать офлайн</div>${offlineGridHTML(list)}`;
+  bindOfflineDel(list, renderOffline);
+  syncPlaying();
+}
+
+/* ---------- 10.6 Мои книги и Библиотека ---------- */
+
+function bindContinueListen() {
+  const cl = $('#cont-listen');
+  if (cl) cl.onclick = () => {
+    if (player.book) return openSheet();
+    if (loadLast({ autoplay: true })) openSheet();   // плеер был закрыт — поднимаем книгу снова
+  };
+}
+
+/* «Мои книги» — то, что сейчас слушаю и читаю. */
+function renderMy() {
+  ++state.seq;
+  state.cat = 'my';
+  state.back = 'my';
+  state.items = [];
+  state.ended = true;
+  state.loading = false;
+  clearTail();
+  const listen = continueListenHTML();
+  const read = continueReadHTML();
+  if (!listen && !read) {
+    view.innerHTML = stateHTML('Пока пусто', 'Начните слушать аудиокнигу или читать книгу — они появятся здесь.');
+    return;
+  }
+  view.innerHTML = listen + read;
+  bindContinueListen();
+  bindContinueRead();
+  syncPlaying();
+}
+
+/* «Библиотека» — только моё: скачанное и начатое. */
+function renderLib() {
+  ++state.seq;
+  state.cat = 'lib';
+  state.back = 'lib';
+  state.items = [];
+  state.ended = true;
+  state.loading = false;
+  clearTail();
+  const list = dl.offlineList();
+  const read = continueReadHTML('Начатое', 8);
+  if (!list.length && !read) {
+    view.innerHTML = stateHTML('Библиотека пуста', 'Скачанные для офлайна и начатые книги появятся здесь.');
+    return;
+  }
+  view.innerHTML = (list.length ? `<div class="section-title">Скачано · ${list.length}</div>${offlineGridHTML(list)}` : '') + read;
+  bindOfflineDel(list, renderLib);
+  bindContinueRead();
   syncPlaying();
 }
 
@@ -1967,12 +2065,22 @@ function bindUI() {
     go(next === 'read' ? 'read' : 'cat/new');
   };
 
-  $('#tabs').addEventListener('click', e => {
-    const tab = e.target.closest('.tab');
+  $('#chips').addEventListener('click', e => {
+    const tab = e.target.closest('.chip-tab');
     if (!tab || tab.dataset.m !== (document.body.dataset.mode || 'listen')) return;
     const cat = tab.dataset.cat;
     if (tab.dataset.m === 'read') go(cat === 'genres' ? 'rgenres' : 'read');
     else go(cat === 'genres' ? 'genres' : 'cat/' + cat);
+  });
+
+  $('#tabbar').addEventListener('click', e => {
+    const btn = e.target.closest('.tabbar-btn');
+    if (!btn) return;
+    const t = btn.dataset.tab;
+    if (t === 'cat') go((document.body.dataset.mode || 'listen') === 'read' ? 'read' : 'cat/new');
+    else if (t === 'my') go('my');
+    else if (t === 'lib') go('lib');
+    else if (t === 'offline') go('cat/offline');
   });
 
   // Стрелки ←/→ — листание страниц в читалке
@@ -1987,6 +2095,9 @@ function bindUI() {
 
   const toTop = $('#to-top');
   toTop.onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
+  // Офлайн-режим реагирует на пропажу и возвращение сети
+  window.addEventListener('online', netUpdate);
+  window.addEventListener('offline', netUpdate);
   $('#dl-cancel').onclick = () => {
     if (dl.task) { dl.task.cancel = true; $('#dl-sub').textContent = 'Останавливаю…'; }
   };
@@ -2017,7 +2128,9 @@ function boot() {
   bindUI();
   restoreLast();
   window.addEventListener('hashchange', route);
-  if (!location.hash) go(localStorage.getItem('polka:mode') === 'read' ? 'read' : 'cat/new', { replace: true });
+  const startOffline = !navigator.onLine;
+  document.body.classList.toggle('is-offline', startOffline);
+  if (!location.hash) go(startOffline ? 'cat/offline' : (localStorage.getItem('polka:mode') === 'read' ? 'read' : 'cat/new'), { replace: true });
   else route();
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

@@ -1,7 +1,7 @@
 /* Оболочка приложения в офлайн-кэше. Данные каталога кэшируются в localStorage.
    Стратегия: документ и код (js/css) — сеть-первым, чтобы обновления доезжали сразу;
    остальное — из кэша с фоновым обновлением. */
-const CACHE = 'polka-shell-v14';
+const CACHE = 'polka-shell-v15';
 const MEDIA_CACHE = 'polka-media';      // аудио, скачанное для офлайна
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'icon.svg', 'manifest.webmanifest'];
 
