@@ -1058,6 +1058,7 @@ function setSearchMode(m) {
   searchMode = m;
   try { localStorage.setItem('polka:smode', m); } catch {}
   paintSearchMode();
+  if (m === 'read') loadCSE();               // прогреваем поиск книг для чтения заранее
   const input = $('#search-input');
   const q = ((input && input.value) || '').trim();
   if (q.length >= 2) runSearch(q);
@@ -1089,16 +1090,23 @@ function loadCSE() {
   csePromise = new Promise(resolve => {
     const host = $('#cse-hidden');
     if (!host) return resolve(null);
-    host.innerHTML = '<div class="gcse-searchresults-only"></div>';
-    let settled = false;
-    const done = () => { if (settled) return; settled = true; resolve(cseElement()); };
-    window.__polkaCseReady = done;
-    const s = document.createElement('script');
-    s.async = true;
-    s.src = 'https://cse.google.com/cse.js?cx=' + CSE_CX + '&callback=__polkaCseReady';
-    s.onerror = () => { if (!settled) { settled = true; resolve(null); } };
-    document.head.appendChild(s);
-    setTimeout(done, 8000);                 // подстраховка, если callback не придёт
+    if (!host.querySelector('.gcse-searchresults-only'))
+      host.innerHTML = '<div class="gcse-searchresults-only"></div>';
+    if (!document.getElementById('cse-js')) {
+      const s = document.createElement('script');
+      s.id = 'cse-js';
+      s.async = true;
+      s.src = 'https://cse.google.com/cse.js?cx=' + CSE_CX;
+      s.onerror = () => resolve(null);
+      document.head.appendChild(s);
+    }
+    // Виджет подключается не сразу — ждём появления элемента, а не момента загрузки скрипта.
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      const el = cseElement();
+      if (el) { clearInterval(tick); resolve(el); }
+      else if (Date.now() - t0 > 20000) { clearInterval(tick); resolve(null); }
+    }, 200);
   });
   return csePromise;
 }
@@ -1134,7 +1142,7 @@ async function cseSearch(q) {
     const tick = setInterval(() => {
       const n = host.querySelectorAll('a.gs-title, .gs-title a').length;
       if (n && n === last) stable++; else { stable = 0; last = n; }
-      if ((n && stable >= 2) || Date.now() - t0 > 9000) { clearInterval(tick); resolve(); }
+      if ((n && stable >= 2) || Date.now() - t0 > 15000) { clearInterval(tick); resolve(); }
     }, 150);
   });
   return cseScrape();
@@ -1142,6 +1150,7 @@ async function cseSearch(q) {
 
 async function openSearch(q) {
   const input = $('#search-input');
+  if (searchMode === 'read') loadCSE();      // прогреваем поиск книг для чтения заранее
   if (document.activeElement !== input) input.value = q || '';
   syncClear();
   if (q) {
@@ -1667,14 +1676,14 @@ function wireRdPanel(id) {
     rdSet.scale = Number(e.target.value) / 100;
     $('#rd-scale-val').textContent = e.target.value + '%';
     rdApply();
-    rdRelayout();
+    rdRelayout(true);
     rdSave();
   };
   $('#rd-lh').oninput = e => {
     rdSet.lh = Number(e.target.value);
     $('#rd-lh-val').textContent = rdSet.lh.toFixed(2);
     rdApply();
-    rdRelayout();
+    rdRelayout(true);
     rdSave();
   };
   $$('#rd-panel [data-seg]').forEach(box => {
@@ -1683,7 +1692,7 @@ function wireRdPanel(id) {
       box.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === btn));
       if (box.dataset.seg === 'theme') rdPage(true);
       rdApply();
-      rdRelayout();
+      rdRelayout(true);
       rdSave();
     });
   });

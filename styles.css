@@ -838,7 +838,7 @@ body.is-reader .rd-stage{
   height:calc(100dvh - var(--sat) - var(--sab) - 28px);
   max-width:var(--rd-w);margin-inline:auto;
 }
-body.is-reader .mini,body.is-reader .to-top,body.is-reader .tabbar{display:none !important}
+body.is-reader .mini,body.is-reader .to-top,body.is-reader .tabbar,body.is-reader .tail,body.is-reader .sentinel{display:none !important}
 
 /* Карточки «Продолжить» */
 .cont-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}
