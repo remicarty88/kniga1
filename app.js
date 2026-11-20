@@ -861,7 +861,24 @@ function renderOffline() {
     return;
   }
   view.innerHTML = `<div class="section-title">Слушать офлайн</div>
-    <div class="grid">${list.map(cardHTML).join('')}</div>`;
+    <div class="grid">${list.map((b, i) => `
+      <div class="ocard">
+        ${cardHTML(b, i)}
+        <button class="ocard-del" data-del="${esc(b.slug)}" aria-label="Удалить из офлайна" title="Удалить из офлайна">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M6 7h12M10 7V5.5A1.5 1.5 0 0 1 11.5 4h1A1.5 1.5 0 0 1 14 5.5V7m-6 0 .8 12.1A1.9 1.9 0 0 0 10.7 21h2.6a1.9 1.9 0 0 0 1.9-1.9L16 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>`).join('')}</div>`;
+  $$('.ocard-del').forEach(btn => btn.onclick = async e => {
+    e.preventDefault(); e.stopPropagation();
+    const slug = btn.dataset.del;
+    const book = list.find(x => x.slug === slug);
+    if (!confirm(`Удалить «${(book && book.title) || slug}» из офлайна?`)) return;
+    const saved = dl.offlineBook(slug) || book;
+    const urls = saved && saved.chapters ? saved.chapters.map(c => c.url) : null;
+    if (player.book && player.book.slug === slug) player.close();
+    await dl.remove(slug, urls);
+    renderOffline();
+  });
   syncPlaying();
 }
 
