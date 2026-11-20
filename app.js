@@ -765,9 +765,11 @@ function markTab(head, param) {
 /* Активный пункт нижнего таб-бара. Без интернета активен только «Офлайн». */
 function markTabbar(head, param, offline) {
   let key = 'cat';
-  if (offline) key = 'offline';
-  else if (head === 'my') key = 'my';
-  else if (head === 'lib') key = 'lib';
+  if (offline || (head === 'cat' && param === 'offline')) key = 'offline';
+  else if (head === 'lib' || head === 'my') key = 'lib';
+  else if (['read', 'rgenres', 'rgenre', 'rbook', 'rread'].includes(head)) key = 'read';
+  else if (head === 'search') key = document.body.dataset.mode === 'read' ? 'read' : 'audio';
+  else if (head !== 'cat' || (param && param !== 'new')) key = 'audio';
   $$('.tabbar-btn').forEach(b => b.classList.toggle('is-active', b.dataset.tab === key));
 }
 
@@ -937,11 +939,11 @@ function homeShellHTML() {
     <section class="home-features">
       <button class="home-feature home-feature-audio" data-home="listen">
         <img class="feature-art" src="assets/images/card-audio-cartoon.jpg" alt="" />
-        <span class="feature-tag">СЛУШАТЬ</span><b>Аудиокниги</b><small>Истории, которые<br>всегда с тобой</small><span class="feature-link">Слушать <i>→</i></span>
+        <span class="feature-tag">СЛУШАТЬ</span><b>Аудиокниги</b><small>Слушайте<br>в любом месте</small><span class="feature-link">Слушать <i>→</i></span>
       </button>
       <button class="home-feature home-feature-reader" data-home="read">
         <img class="feature-art" src="assets/images/card-reader-cartoon.jpg" alt="" />
-        <span class="feature-tag">ЧИТАТЬ</span><b>Читалка</b><small>Тихое место<br>для новых историй</small><span class="feature-link">Открыть <i>→</i></span>
+        <span class="feature-tag">ЧИТАТЬ</span><b>Читалка</b><small>Читай свои<br>любимые истории</small><span class="feature-link">Открыть <i>→</i></span>
       </button>
     </section>
     <section class="home-section home-recommend">
@@ -2630,14 +2632,10 @@ function bindUI() {
     if (!btn) return;
     const t = btn.dataset.tab;
     if (t === 'cat') go((document.body.dataset.mode || 'listen') === 'read' ? 'read' : 'cat/new');
-    else if (t === 'my') go('my');
     else if (t === 'lib') go('lib');
+    else if (t === 'audio') { applyMode('listen'); go('cat/popular'); }
+    else if (t === 'read') { applyMode('read'); go('read'); }
     else if (t === 'offline') go('cat/offline');
-    else if (t === 'player') {
-      if (player.book) return openSheet();
-      if (loadLast({ autoplay: true })) openSheet();
-      else toast('Выберите аудиокнигу для прослушивания');
-    }
   });
 
   // Стрелки ←/→ — листание экранов в читалке
