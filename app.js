@@ -344,6 +344,25 @@ function parseLrDetail(html) {
   };
 }
 
+function parseLrAuthor(html, name) {
+  const doc = toDoc(html);
+  const seen = new Set();
+  return [...doc.querySelectorAll('.indoorUnit .openBook a[href*="book-comments.php"]')]
+    .map(a => {
+      const href = a.getAttribute('href') || '';
+      const id = (href.match(/[?&]book=(\d+)/) || [])[1] || '';
+      const title = String(a.getAttribute('title') || a.textContent || '')
+        .replace(/^(?:Онлайн\s+)?Книга\s*[«"]?/i, '')
+        .replace(/[»"]$/, '')
+        .trim();
+      const cover = a.closest('.bodyUnit')?.querySelector('.coverBook img')?.getAttribute('src') || '';
+      if (!id || !title || seen.has(id)) return null;
+      seen.add(id);
+      return { id, title, author: name, cover, genre: '', time: '' };
+    })
+    .filter(Boolean);
+}
+
 function parseLrPage(html) {
   const doc = toDoc(html);
   const main = doc.querySelector('#readerContent');
@@ -458,6 +477,9 @@ const apiLrGenre = (id, page = 1) =>
 
 const apiLrDetail = (id) =>
   cached('lr:book:' + id, TTL.lrbook, async () => parseLrDetail(await fetchText(`${SRC_READ}/book-comments.php?book=${id}`)), d => d.title);
+
+const apiLrAuthor = (id, name) =>
+  cached(`lr:author:${id}`, TTL.lr, async () => parseLrAuthor(await fetchText(`${SRC_READ}/books.php?id_author=${encodeURIComponent(id)}`), name), d => d.length);
 
 async function apiLrPage(id, page = 1) {
   const key = `lr:page:${id}:${page}`;
@@ -667,13 +689,19 @@ const state = {
   query: '',
   scroll: {},
   book: null,
+  author: null,
   seq: 0,            // токен актуальности рендера списка
 };
 
 let observer = null;
+let lastLocationHash = null;
+
+function cleanHash(hash = location.hash) {
+  return String(hash || '').replace(/^#/, '').replace(/[?&]gsc\.[^&]*/g, '').replace(/[?&]$/, '');
+}
 
 function parseHash() {
-  const raw = location.hash.replace(/^#/, '') || '/cat/new';
+  const raw = cleanHash() || '/cat/new';
   const [path, qs] = raw.split('?');
   return { parts: path.split('/').filter(Boolean), q: new URLSearchParams(qs || '') };
 }
@@ -681,6 +709,7 @@ function parseHash() {
 function go(hash, { replace = false } = {}) {
   const url = location.pathname + location.search + '#' + hash;
   history[replace ? 'replaceState' : 'pushState']({}, '', url);
+  lastLocationHash = cleanHash();
   route();
 }
 
@@ -710,7 +739,7 @@ function route() {
   const offline = document.body.classList.contains('is-offline');
   const isCat = head === 'cat' || head === 'genres' || head === 'genre';
   // На профиле и полке режим каталога не влияет на содержимое страницы.
-  if (!['my', 'lib', 'library'].includes(head)) applyMode(READ_HEADS.includes(head) ? 'read' : 'listen');
+  if (!['my', 'lib', 'library'].includes(head)) applyMode(READ_HEADS.includes(head) || (head === 'author' && q.get('mode') === 'read') ? 'read' : 'listen');
   rdPage(reader);   // тема страницы — только в читалке
   // В читалке не должно быть ничего лишнего: только текст и кнопка настроек.
   document.body.classList.toggle('is-reader', reader);
@@ -727,6 +756,7 @@ function route() {
   if (head === 'genres') return renderGenres();
   if (head === 'genre') return renderGenre(parts[1], parts[2] || '');
   if (head === 'search') return openSearch(q.get('q') || '');
+  if (head === 'author') return renderAuthor(decodeURIComponent(parts[1] || ''), q.get('mode') || 'audio', q.get('query') || '');
   if (head === 'book') return renderBook(parts[1]);
   if (head === 'my') return renderMy();
   if (head === 'lib') return renderShelf();
@@ -768,7 +798,7 @@ function markTabbar(head, param) {
   let key = 'cat';
   if (head === 'my') key = 'my';
   else if (head === 'lib') key = 'lib';
-  else if (head === 'library' || head === 'genres' || head === 'genre' || head === 'rgenres' || head === 'rgenre' || head === 'read' || (head === 'cat' && param === 'offline')) key = 'library';
+  else if (head === 'library' || head === 'author' || head === 'genres' || head === 'genre' || head === 'rgenres' || head === 'rgenre' || head === 'read' || (head === 'cat' && param === 'offline')) key = 'library';
   $$('.tabbar-btn').forEach(b => b.classList.toggle('is-active', b.dataset.tab === key));
 }
 
@@ -793,6 +823,8 @@ function netUpdate() {
 
 const clockIcon = '<svg viewBox="0 0 24 24" fill="none"><path d="M9 7H11V12H16V14H9V7Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2C17.5228 2 22 6.47715 22 12ZM20 12C20 16.4183 16.4183 20 12 20C7.58172 20 4 16.4183 4 12C4 7.58172 7.58172 4 12 4C16.4183 4 20 7.58172 20 12Z" fill="currentColor"/></svg>';
 const playIcon = '<svg viewBox="3 2 18 20" fill="none"><path d="M15 12.3301L9 16.6603L9 8L15 12.3301Z" fill="currentColor"/></svg>';
+
+const authorHref = (name, mode) => `#/author/${encodeURIComponent(name)}?mode=${mode}`;
 
 const cardHTML = (b, i) => `
   <a class="card" style="--i:${i}" data-slug="${esc(b.slug)}" href="#/book/${esc(b.slug)}">
@@ -913,6 +945,18 @@ const homeCardHTML = (b, i) => `
     ${b.time ? `<span class="home-book-time">${clockIcon}${esc(b.time)}</span>` : ''}
   </a>`;
 
+const homeReadCardHTML = (b, i) => `
+  <a class="home-book home-read-book" style="--i:${i}" href="#/rbook/${esc(b.id)}" aria-label="${esc(b.title)}">
+    <div class="home-book-cover">
+      ${b.cover ? `<img src="${esc(lrCover(b.cover))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}
+      <span class="home-book-badge">Читать</span>
+      <span class="home-book-open">${bookIcon}</span>
+    </div>
+    <span class="home-book-title">${esc(b.title)}</span>
+    <span class="home-book-author">${esc(b.author || '')}</span>
+    ${b.time ? `<span class="home-book-time">${clockIcon}${esc(b.time)}</span>` : ''}
+  </a>`;
+
 function homeShellHTML() {
   return `
     <section class="home-hero">
@@ -927,6 +971,10 @@ function homeShellHTML() {
     <section class="home-section">
       <div class="home-section-head"><h2><i>🔥</i> Популярное сегодня</h2><button data-home="popular">Все <span>→</span></button></div>
       <div class="home-books" id="home-books">${Array.from({ length: 4 }, () => '<div class="home-book-skeleton"><i></i><b></b><small></small></div>').join('')}</div>
+    </section>
+    <section class="home-section home-reading">
+      <div class="home-section-head"><h2><i>📖</i> Книги для чтения</h2><button data-home="read">Все <span>→</span></button></div>
+      <div class="home-books" id="home-read-books">${Array.from({ length: 4 }, () => '<div class="home-book-skeleton"><i></i><b></b><small></small></div>').join('')}</div>
     </section>
     <section class="home-section home-recommend">
       <div class="home-section-head"><h2><i>⭐</i> Жанры</h2><button data-home="genres">Все <span>→</span></button></div>
@@ -946,6 +994,7 @@ function bindHome() {
   $$('[data-home]').forEach(btn => btn.addEventListener('click', () => {
     const action = btn.dataset.home;
     if (action === 'popular') { applyMode('listen'); go('cat/popular'); }
+    else if (action === 'read') { applyMode('read'); go('read'); }
     else if (action === 'genres') go('library');
     else go('cat/new');
   }));
@@ -968,9 +1017,10 @@ async function renderHome(seq) {
   clearTail();
   bindHome();
   try {
-    const [popular, fresh] = await Promise.all([
+    const [popular, fresh, readable] = await Promise.all([
       apiList('popular', 1).catch(() => ({ items: [] })),
       apiList('new', 1).catch(() => ({ items: [] })),
+      apiLrList(1).catch(() => []),
     ]);
     if (seq !== state.seq) return;
     const items = (popular.items.length ? popular.items : fresh.items).slice(0, 8);
@@ -978,6 +1028,10 @@ async function renderHome(seq) {
     if (books) books.innerHTML = items.length
       ? items.map(homeCardHTML).join('')
       : '<div class="home-empty">Подборка появится, когда каталог будет доступен.</div>';
+    const readBooks = $('#home-read-books');
+    if (readBooks) readBooks.innerHTML = readable.length
+      ? readable.slice(0, 8).map(homeReadCardHTML).join('')
+      : '<div class="home-empty">Подборка книг для чтения появится, когда каталог будет доступен.</div>';
     state.items = items;
     restoreScroll(state.route);
   } catch {
@@ -1351,6 +1405,58 @@ function setSearchMode(m) {
     : 'Введите название книги, автора или чтеца.');
 }
 
+function normalizeAuthorName(value) {
+  return String(value || '').toLocaleLowerCase('ru')
+    .replace(/ё/g, 'е')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function authorMatchesQuery(author, query) {
+  const name = normalizeAuthorName(author);
+  const words = normalizeAuthorName(query).split(/\s+/).filter(Boolean);
+  return words.length > 0 && (name.includes(words.join(' ')) || words.every(word => name.includes(word)));
+}
+
+function authorCandidates(items, query) {
+  if (normalizeAuthorName(query).replace(/\s/g, '').length < 3) return [];
+  const found = new Map();
+  (items || []).forEach(book => {
+    const author = String(book.author || (Array.isArray(book.authors) ? book.authors.join(', ') : book.authors) || '').trim();
+    if (!author || !authorMatchesQuery(author, query)) return;
+    const key = normalizeAuthorName(author);
+    const current = found.get(key) || { name: author, count: 0 };
+    current.count++;
+    found.set(key, current);
+  });
+  return [...found.values()].sort((a, b) => b.count - a.count).slice(0, 3);
+}
+
+function authorSuggestionHTML(items, query, mode) {
+  const candidates = authorCandidates(items, query);
+  if (!candidates.length) return '';
+  return `<section class="author-suggestions" aria-label="Авторы по запросу">
+    <div class="author-suggestions-title">Авторы <span>по вашему запросу</span></div>
+    <div class="author-suggestion-list">${candidates.map(a => `
+      <a class="author-suggestion" href="#/author/${encodeURIComponent(a.name)}?mode=${mode}&query=${encodeURIComponent(query)}">
+        <span class="author-avatar">${esc(a.name.charAt(0).toLocaleUpperCase('ru'))}</span>
+        <span class="author-suggestion-copy"><b>${esc(a.name)}</b><small>Автор · ${a.count} ${a.count === 1 ? 'книга в выдаче' : 'книг в выдаче'}</small></span>
+        <span class="author-suggestion-arrow">›</span>
+      </a>`).join('')}</div>
+  </section>`;
+}
+
+function showAuthorSuggestions(items, query, mode) {
+  const old = view.querySelector('.author-suggestions');
+  if (old) old.remove();
+  const html = authorSuggestionHTML(items, query, mode);
+  if (!html) return;
+  const section = document.createElement('div');
+  section.innerHTML = html;
+  const target = view.querySelector('.section-title');
+  view.insertBefore(section.firstElementChild, target || view.firstChild);
+}
+
 /* --- Поиск книг для чтения: встроенный Google CSE источника LoveRead --- */
 /* Серверную выдачу источник не отдаёт, зато его же поиск (CSE) доступен
    прямо в браузере. Запускаем его в скрытом блоке и превращаем найденные
@@ -1358,6 +1464,7 @@ function setSearchMode(m) {
 
 const CSE_CX = 'c549cf6a3e4cc48c6';
 let csePromise = null;
+let cseSearchDepth = 0;
 
 function cseElement() {
   const api = window.google && google.search && google.search.cse && google.search.cse.element;
@@ -1375,7 +1482,7 @@ function loadCSE() {
     const host = $('#cse-hidden');
     if (!host) return resolve(null);
     if (!host.querySelector('.gcse-searchresults-only'))
-      host.innerHTML = '<div class="gcse-searchresults-only"></div>';
+      host.innerHTML = '<div class="gcse-searchresults-only" data-enableHistory="false"></div>';
     if (!document.getElementById('cse-js')) {
       const s = document.createElement('script');
       s.id = 'cse-js';
@@ -1437,17 +1544,37 @@ async function cseSearch(q) {
   const el = await loadCSE();
   const host = $('#cse-hidden');
   if (!el || !host) return null;
-  try { el.execute(q); } catch { return null; }
-  await new Promise(resolve => {                 // ждём, пока виджет отрисует выдачу
-    const t0 = Date.now();
-    let last = -1, stable = 0;
-    const tick = setInterval(() => {
-      const n = host.querySelectorAll('a.gs-title, .gs-title a').length;
-      if (n && n === last) stable++; else { stable = 0; last = n; }
-      if ((n && stable >= 2) || Date.now() - t0 > 15000) { clearInterval(tick); resolve(); }
-    }, 150);
-  });
-  return cseScrape();
+  const appHash = cleanHash();
+  cseSearchDepth++;
+  try {
+    el.execute(q);
+    await new Promise(resolve => {                 // ждём, пока виджет отрисует выдачу
+      const t0 = Date.now();
+      let last = -1, stable = 0;
+      const tick = setInterval(() => {
+        const n = host.querySelectorAll('a.gs-title, .gs-title a').length;
+        if (n && n === last) stable++; else { stable = 0; last = n; }
+        if ((n && stable >= 2) || Date.now() - t0 > 15000) { clearInterval(tick); resolve(); }
+      }, 150);
+    });
+    return cseScrape();
+  } catch {
+    return null;
+  } finally {
+    cseSearchDepth--;
+    if (!cseSearchDepth && lastLocationHash === appHash && cleanHash() !== appHash) {
+      history.replaceState(history.state, '', location.pathname + location.search + '#' + appHash);
+    }
+    if (!cseSearchDepth) lastLocationHash = cleanHash();
+  }
+}
+
+function cseAuthorId() {
+  for (const link of $$('#cse-hidden a.gs-title, #cse-hidden .gs-title a')) {
+    const id = ((link.href || '').match(/\/books\.php\?id_author=(\d+)/i) || [])[1];
+    if (id) return id;
+  }
+  return '';
 }
 
 async function openSearch(q) {
@@ -1470,8 +1597,9 @@ async function openSearch(q) {
 /* Уточняем найденные книги у источника: у поисковой выдачи нет ни обложек,
    ни авторов. Догружаем их в фоне (по несколько сразу) и по мере готовности
    подставляем в уже отрисованные карточки. */
-async function enrichReadItems(raw, seq) {
+async function enrichReadItems(raw, seq, query = '', showSuggestions = true) {
   const items = raw.slice(0, 24);
+  const details = new Map();
   let idx = 0;
   const worker = async () => {
     while (idx < items.length) {
@@ -1480,19 +1608,27 @@ async function enrichReadItems(raw, seq) {
       try {
         const d = await apiLrDetail(b.id);
         if (seq !== state.seq) return;
-        if (d && d.title) patchReadCard(b.id, {
+        if (d && d.title) {
+          const enriched = {
           id: b.id,
           title: d.title,
           author: d.author || '',
           cover: d.cover || '',
           genre: (d.genres && d.genres[0]) || '',
           time: d.readTime || '',
-        });
+          };
+          details.set(b.id, enriched);
+          patchReadCard(b.id, enriched);
+        }
       } catch {}
       await sleep(120);
     }
   };
   await Promise.all(Array.from({ length: Math.min(5, items.length) }, worker));
+  if (showSuggestions && seq === state.seq) {
+    showAuthorSuggestions(items.map(b => details.get(b.id) || b), query, 'read');
+  }
+  return items.map(b => details.get(b.id) || b);
 }
 
 /* Подставляем уточнённые данные в карточку, не перерисовывая сетку. */
@@ -1538,7 +1674,7 @@ async function runReadSearch(q, seq) {
     state.ended = true;
     view.innerHTML = `<div class="section-title">Читать · найдено: ${items.length}</div>
       <div class="grid">${items.map((b, i) => readerCardHTML({ id: b.id, title: b.title }, i)).join('')}</div>`;
-    enrichReadItems(items, seq);          // обложки и авторы подтягиваются по ходу
+    enrichReadItems(items, seq, q);       // обложки, авторы и подсказки догружаются по ходу
   } catch (e) {
     if (seq !== state.seq) return;
     view.innerHTML = stateHTML('Ошибка', errorText(e), { label: 'Повторить' });
@@ -1567,7 +1703,7 @@ async function runSearch(q) {
     if (seq !== state.seq) return;
     if (!items.length) { view.innerHTML = stateHTML('Ничего не найдено', 'По запросу «' + q + '» книг нет.'); return; }
     state.items = items;
-    view.innerHTML = `<div class="section-title">${total ? 'Найдено: ' + total : 'Результаты'}</div>
+    view.innerHTML = `${authorSuggestionHTML(items, q, 'audio')}<div class="section-title">${total ? 'Найдено: ' + total : 'Результаты'}</div>
       <div class="grid">${items.map(cardHTML).join('')}</div>`;
     syncPlaying();
     state.ended = items.length < 10;
@@ -1576,6 +1712,116 @@ async function runSearch(q) {
     if (seq !== state.seq) return;
     view.innerHTML = stateHTML('Ошибка', errorText(e), { label: 'Повторить' });
     $('#state-action').onclick = () => runSearch(q);
+  }
+}
+
+function authorBookMatches(book, author) {
+  const value = book && (book.author || book.authors);
+  const authors = (Array.isArray(value) ? value.join(', ') : String(value || ''))
+    .split(/[,;]|\s+и\s+/i)
+    .map(normalizeAuthorName)
+    .filter(Boolean);
+  const wanted = normalizeAuthorName(author);
+  return !!wanted && authors.includes(wanted);
+}
+
+function authorBookHeader(name, mode, count = 0) {
+  return `<section class="author-page-head">
+    <button class="back-btn" id="author-back">${backIcon}К поиску</button>
+    <div class="author-page-identity">
+      <span class="author-page-avatar">${esc(name.charAt(0).toLocaleUpperCase('ru'))}</span>
+      <div><span class="library-eyebrow">АВТОР</span><h1>${esc(name)}</h1><p id="author-book-count">${count ? `${count} ${count === 1 ? 'книга' : 'книг'} в подборке` : 'Все книги автора'}</p></div>
+    </div>
+    <div class="author-format">${mode === 'read' ? 'Книги для чтения' : 'Аудиокниги'}</div>
+  </section>`;
+}
+
+async function renderAuthor(name, mode = 'audio', returnQuery = '') {
+  if (!name) return go('search');
+  mode = mode === 'read' ? 'read' : 'audio';
+  document.title = `${name} — Bookify`;
+  const seq = ++state.seq;
+  const safeReturn = returnQuery ? `search?q=${encodeURIComponent(returnQuery)}` : 'search';
+  state.cat = 'author';
+  state.back = safeReturn;
+  state.items = [];
+  state.page = 1;
+  state.ended = mode === 'read';
+  state.loading = false;
+  state.author = { name, mode, returnQuery };
+  view.innerHTML = authorBookHeader(name, mode) + skeletonHTML(6);
+  $('#author-back').onclick = () => go(safeReturn);
+  try {
+    let items = [];
+    if (mode === 'audio') {
+      const result = await apiSearch(name, 1);
+      items = result.items.filter(book => authorBookMatches(book, name));
+      state.author.total = result.total;
+      state.author.sourceCount = result.items.length;
+      state.ended = result.items.length < 10 || (!!result.total && result.items.length >= result.total);
+    } else {
+      const result = await cseSearch(name + ' site:loveread.ec');
+      if (result === null) throw new Error('search');
+      const authorId = cseAuthorId();
+      items = authorId ? await apiLrAuthor(authorId, name) : [];
+      if (!items.length) {
+        const enriched = await enrichReadItems(result, seq, '', false);
+        items = enriched.filter(book => authorBookMatches(book, name));
+      }
+    }
+    if (seq !== state.seq) return;
+    state.items = items;
+    const cards = mode === 'read' ? items.map(readerCardHTML).join('') : items.map(cardHTML).join('');
+    view.innerHTML = authorBookHeader(name, mode, items.length) +
+      (items.length ? `<div class="grid">${cards}</div>` : `<div class="author-empty">Пока не нашли книги этого автора.</div>`);
+    $('#author-back').onclick = () => go(safeReturn);
+    syncPlaying();
+    if (mode === 'audio' && !state.ended) observeMore(loadMoreAuthor);
+  } catch (e) {
+    if (seq !== state.seq) return;
+    view.innerHTML = authorBookHeader(name, mode) + stateHTML('Не удалось открыть автора', errorText(e), { label: 'Повторить' });
+    $('#author-back').onclick = () => go(safeReturn);
+    $('#state-action').onclick = () => renderAuthor(name, mode, returnQuery);
+  }
+}
+
+async function loadMoreAuthor() {
+  if (state.loading || state.ended || !state.author || state.author.mode !== 'audio') return;
+  const seq = state.seq;
+  const { name } = state.author;
+  state.loading = true;
+  spinner();
+  try {
+    let page = state.page;
+    let added = [];
+    let exhausted = false;
+    for (let attempt = 0; attempt < 4 && !added.length; attempt++) {
+      const result = await apiSearch(name, ++page);
+      added = result.items.filter(book => authorBookMatches(book, name));
+      exhausted = result.items.length < 10 || (!!result.total && page * 10 >= result.total);
+      if (!result.items.length || exhausted) break;
+    }
+    if (seq !== state.seq) return;
+    state.page = page;
+    state.ended = exhausted;
+    const known = new Set(state.items.map(book => book.id));
+    added = added.filter(book => !known.has(book.id));
+    if (added.length) {
+      state.items.push(...added);
+      const grid = view.querySelector('.grid');
+      if (grid) grid.insertAdjacentHTML('beforeend', added.map(cardHTML).join(''));
+      const count = $('#author-book-count');
+      if (count) count.textContent = `${state.items.length} книг в подборке`;
+      syncPlaying();
+    } else if (!exhausted) {
+      observeMore(loadMoreAuthor);
+    } else if (!state.items.length) {
+      view.querySelector('.grid')?.remove();
+    }
+  } catch (e) {
+    if (seq === state.seq) toast(errorText(e));
+  } finally {
+    if (seq === state.seq) { state.loading = false; clearTail(); }
   }
 }
 
@@ -1650,7 +1896,7 @@ async function renderBook(slug) {
         <div class="cover">${b.cover ? `<img src="${esc(coverImg(b.cover, 'full'))}" alt="" decoding="async" referrerpolicy="no-referrer">` : ''}</div>
         <div class="book-head-info">
           <div class="book-h1">${esc(b.title)}</div>
-          ${b.authors.length ? `<div class="book-line">Автор: <b>${esc(b.authors.join(', '))}</b></div>` : ''}
+          ${b.authors.length ? `<div class="book-line">Автор: <b>${b.authors.map(name => `<a class="author-name" href="${authorHref(name, 'audio')}">${esc(name)}</a>`).join(', ')}</b></div>` : ''}
           ${b.readers.length ? `<div class="book-line">Читает: <b>${esc(b.readers.join(', '))}</b></div>` : ''}
           <div class="chips">
             ${b.genre ? `<span class="chip">${esc(b.genre)}</span>` : ''}
@@ -1671,7 +1917,7 @@ async function renderBook(slug) {
       ${b.chapters.length > 1 ? `<div class="section-title">Главы</div>
         <div class="sheet-chapters">${b.chapters.map((c, i) => chapterRow(c, i, playing ? player.index : -1)).join('')}</div>` : ''}`;
 
-    $('#back').onclick = () => history.length > 1 ? history.back() : go('cat/new');
+    $('#back').onclick = () => go(state.back || 'cat/new');
     const cta = $('#play-cta');
     if (cta) cta.onclick = () => {
       if (player.book && player.book.slug === b.slug) return audio.paused ? player.toggle() : openSheet();
@@ -1819,7 +2065,7 @@ async function renderReadBook(id) {
         <div class="cover">${b.cover ? `<img src="${esc(lrCover(b.cover))}" alt="" decoding="async" referrerpolicy="no-referrer">` : ''}</div>
         <div class="book-head-info">
           <div class="book-h1">${esc(b.title)}</div>
-          ${b.author ? `<div class="book-line">Автор: <b>${esc(b.author)}</b></div>` : ''}
+          ${b.author ? `<div class="book-line">Автор: <b><a class="author-name" href="${authorHref(b.author, 'read')}">${esc(b.author)}</a></b></div>` : ''}
           <div class="chips">
             ${b.genres.slice(0, 2).map(g => `<span class="chip">${esc(g)}</span>`).join('')}
             ${b.year ? `<span class="chip">${esc(b.year)}</span>` : ''}
@@ -1834,7 +2080,7 @@ async function renderReadBook(id) {
         <button class="shelf-cta" id="shelf-cta" data-kind="read" data-id="${esc(id)}">${plusIcon}На полку</button>
       </div>
       ${b.description ? `<div class="section-title">Описание</div><div class="book-desc">${esc(b.description)}</div>` : ''}`;
-    $('#back').onclick = () => history.length > 1 ? history.back() : go('read');
+    $('#back').onclick = () => go(state.back || 'read');
     $('#read-cta').onclick = () => {
       if (pos && pos.c > 0 && pos.p === page) pendingSpot = { id, p: page, c: pos.c };
       go(`rread/${id}/${page}`);
@@ -3292,7 +3538,59 @@ function showCreds(uid, pass, name) {
   go.onclick = () => {
     m.classList.add('is-hidden'); m.innerHTML = '';
     if (isShelfRoute()) renderShelf();
+    if (pass) showOnboarding(uid);
   };
+}
+
+const onboardingSteps = [
+  {
+    icon: '◫', title: 'Выбирай свой формат',
+    text: 'Во вкладке «Библиотека» можно переключаться между аудиокнигами и книгами для чтения. Жанры и подборки меняются вместе с форматом.',
+  },
+  {
+    icon: '+', title: 'Сохраняй на свою полку',
+    text: 'На странице любой книги нажми «На полку». Книга останется рядом, а прогресс чтения или прослушивания сохранится.',
+  },
+  {
+    icon: '⌕', title: 'Ищи книги и авторов',
+    text: 'Начни вводить имя автора: в подсказке можно открыть его страницу и посмотреть книги. Поиск по названию работает как обычно.',
+  },
+  {
+    icon: '↗', title: 'Следи за прогрессом',
+    text: 'В профиле собраны время в приложении, завершённые книги и текущий прогресс. Синхронизация доступна при подключении к сети.',
+  },
+];
+
+function showOnboarding(uid, index = 0) {
+  const key = 'polka:onboarded:' + uid;
+  try { if (localStorage.getItem(key)) return; } catch {}
+  const m = $('#accm');
+  const step = onboardingSteps[index];
+  if (!m || !step) return;
+  m.classList.remove('is-hidden');
+  m.innerHTML = `
+    <div class="modal-bg"></div>
+    <section class="modal-card onboarding-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+      <div class="onboarding-progress" aria-label="Шаг ${index + 1} из ${onboardingSteps.length}">
+        ${onboardingSteps.map((_, i) => `<i class="${i <= index ? 'is-active' : ''}"></i>`).join('')}
+      </div>
+      <div class="onboarding-icon">${step.icon}</div>
+      <span class="library-eyebrow">БЫСТРОЕ ЗНАКОМСТВО · ${index + 1}/${onboardingSteps.length}</span>
+      <h2 id="onboarding-title">${step.title}</h2>
+      <p class="onboarding-copy">${step.text}</p>
+      <button class="modal-primary" id="onboarding-next">${index === onboardingSteps.length - 1 ? 'Начать пользоваться' : 'Дальше'}</button>
+      <button class="onboarding-skip" id="onboarding-skip">Пропустить знакомство</button>
+    </section>`;
+  const finish = () => {
+    try { localStorage.setItem(key, '1'); } catch {}
+    m.classList.add('is-hidden');
+    m.innerHTML = '';
+  };
+  $('#onboarding-next').onclick = () => {
+    if (index === onboardingSteps.length - 1) finish();
+    else showOnboarding(uid, index + 1);
+  };
+  $('#onboarding-skip').onclick = finish;
 }
 
 /* --- Полка --- */
@@ -3472,6 +3770,14 @@ function bindUI() {
   }, { passive: true });
 }
 
+function routeFromLocation(event) {
+  if (cseSearchDepth && event && event.type !== 'popstate') return;
+  const hash = cleanHash();
+  if (hash === lastLocationHash) return;
+  lastLocationHash = hash;
+  route();
+}
+
 function boot() {
   applyTheme();
   rdApply();
@@ -3485,7 +3791,9 @@ function boot() {
   });
   bindUI();
   restoreLast();
-  window.addEventListener('hashchange', route);
+  lastLocationHash = cleanHash();
+  window.addEventListener('hashchange', routeFromLocation);
+  window.addEventListener('popstate', routeFromLocation);
   const startOffline = !navigator.onLine;
   document.body.classList.toggle('is-offline', startOffline);
   if (!location.hash) go(startOffline ? 'cat/offline' : (localStorage.getItem('polka:mode') === 'read' ? 'read' : 'cat/new'), { replace: true });
