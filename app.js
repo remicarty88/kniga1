@@ -695,6 +695,7 @@ const state = {
 
 let observer = null;
 let lastLocationHash = null;
+let lastRenderedHash = null;     // предыдущий экран — цель кнопок «Назад»
 
 function cleanHash(hash = location.hash) {
   return String(hash || '').replace(/^#/, '').replace(/[?&]gsc\.[^&]*/g, '').replace(/[?&]$/, '');
@@ -708,9 +709,17 @@ function parseHash() {
 
 function go(hash, { replace = false } = {}) {
   const url = location.pathname + location.search + '#' + hash;
-  history[replace ? 'replaceState' : 'pushState']({}, '', url);
+  history[replace ? 'replaceState' : 'pushState']({ app: true }, '', url);
   lastLocationHash = cleanHash();
   route();
+}
+
+/* Кнопка «Назад»: сначала идём по истории браузера — тогда кнопка в приложении
+   и системная кнопка ведут себя одинаково. Если истории нет (приложение
+   открыли сразу на внутреннем экране) — возвращаемся на запомненный маршрут. */
+function goBack(fallback = 'cat/new') {
+  if (history.state && history.state.app) history.back();
+  else go(state.back || fallback);
 }
 
 function saveScroll() {
@@ -728,6 +737,10 @@ function route() {
   const { parts, q } = parseHash();
   const head = parts[0] || 'cat';
   state.route = head + '/' + (parts[1] || '');
+  // Куда вернут кнопки «Назад»: экран, с которого пришли.
+  const here = cleanHash();
+  if (lastRenderedHash && lastRenderedHash !== here) state.back = lastRenderedHash;
+  lastRenderedHash = here;
   window.scrollTo(0, 0);
   document.title = 'Bookify';
   disconnectObserver();
@@ -1684,6 +1697,14 @@ async function runReadSearch(q, seq) {
 
 async function runSearch(q) {
   q = (q || '').trim();
+  // Запрос запоминаем в адресе, чтобы кнопка «Назад» возвращала к той же выдаче.
+  if (parseHash().parts[0] === 'search') {
+    const want = q.length >= 2 ? 'search?q=' + encodeURIComponent(q) : 'search';
+    if (cleanHash() !== want) {
+      history.replaceState({ app: true }, '', location.pathname + location.search + '#' + want);
+      lastLocationHash = want;
+    }
+  }
   const seq = ++state.seq;
   state.items = [];
   state.page = 1;
@@ -1917,7 +1938,7 @@ async function renderBook(slug) {
       ${b.chapters.length > 1 ? `<div class="section-title">Главы</div>
         <div class="sheet-chapters">${b.chapters.map((c, i) => chapterRow(c, i, playing ? player.index : -1)).join('')}</div>` : ''}`;
 
-    $('#back').onclick = () => go(state.back || 'cat/new');
+    $('#back').onclick = () => goBack('cat/new');
     const cta = $('#play-cta');
     if (cta) cta.onclick = () => {
       if (player.book && player.book.slug === b.slug) return audio.paused ? player.toggle() : openSheet();
@@ -2080,7 +2101,7 @@ async function renderReadBook(id) {
         <button class="shelf-cta" id="shelf-cta" data-kind="read" data-id="${esc(id)}">${plusIcon}На полку</button>
       </div>
       ${b.description ? `<div class="section-title">Описание</div><div class="book-desc">${esc(b.description)}</div>` : ''}`;
-    $('#back').onclick = () => go(state.back || 'read');
+    $('#back').onclick = () => goBack('read');
     $('#read-cta').onclick = () => {
       if (pos && pos.c > 0 && pos.p === page) pendingSpot = { id, p: page, c: pos.c };
       go(`rread/${id}/${page}`);
@@ -2393,8 +2414,8 @@ function wireRdPanel(id) {
     nmSave(id, list);
     renderNm(id, page);
   };
-  $('#rd-exit').onclick = () => go('rbook/' + id);
-  $('#rd-back').onclick = () => go('rbook/' + id);
+  $('#rd-exit').onclick = () => goBack('rbook/' + id);
+  $('#rd-back').onclick = () => goBack('rbook/' + id);
   openRdPanel(rdPanelOpen);
 }
 
@@ -2609,12 +2630,14 @@ async function renderReader(id, page) {
   state.loading = false;
   const back = `<div class="back-btn" id="back">${backIcon}Назад</div>`;
   view.innerHTML = back + skeletonHTML(1);
-  $('#back').onclick = () => go('rbook/' + id);
+  $('#back').onclick = () => goBack('rbook/' + id);
   try {
     const d = await apiLrPage(id, page);
     if (seq !== state.seq) return;
     const meta = store.getStale('lr:meta:' + id) || {};
     const title = meta.title || d.title || 'Книга';
+    // Начали читать — книга сразу на полке.
+    if (meta.title) autoShelf('read', id, { title: meta.title, author: meta.author || '', cover: meta.cover || '' });
     // Книга и настройки остаются поверх страницы, перелистывание не меняется.
     view.innerHTML = `
       <div class="rd-reader-shell">
@@ -2657,7 +2680,7 @@ async function renderReader(id, page) {
   } catch (e) {
     if (seq !== state.seq) return;
     view.innerHTML = back + stateHTML('Ошибка', errorText(e), { label: 'Повторить' });
-    $('#back').onclick = () => go('rbook/' + id);
+    $('#back').onclick = () => goBack('rbook/' + id);
     $('#state-action').onclick = () => renderReader(id, page);
   }
 }
@@ -2858,7 +2881,16 @@ function restoreLast() {
 
 /* --- события аудио --- */
 
-audio.addEventListener('play', () => { document.body.classList.add('playing'); syncPlaying(); });
+audio.addEventListener('play', () => {
+  document.body.classList.add('playing');
+  // Начали слушать — книга сразу на полке.
+  if (player.book) autoShelf('audio', player.book.slug, {
+    title: player.book.title || '',
+    cover: player.book.cover || '',
+    author: (player.book.authors || [])[0] || '',
+  });
+  syncPlaying();
+});
 audio.addEventListener('pause', () => { document.body.classList.remove('playing'); syncPlaying(); });
 
 audio.addEventListener('timeupdate', () => {
@@ -3162,6 +3194,13 @@ async function copyText(text) {
 /* --- Операции с полкой --- */
 
 function shelfHas(kind, id) { return !!shelf[shelfKey(kind, id)]; }
+
+/* Книга сама встаёт на полку, как только её начали слушать или читать. */
+function autoShelf(kind, id, info) {
+  if (!acc || !id || shelfHas(kind, id)) return;
+  shelfAdd({ kind, id, ...info });
+  toast('Книга добавлена на полку');
+}
 
 function shelfAdd(entry) {
   if (!acc) { openGate('register'); return null; }
@@ -3703,7 +3742,7 @@ function bindUI() {
     input.value = '';
     syncClear();
     input.blur();
-    go(state.back || 'cat/new');
+    goBack('cat/new');
   };
   clearBtn.onclick = () => {
     input.value = '';
@@ -3739,7 +3778,12 @@ function bindUI() {
     const btn = e.target.closest('.tabbar-btn');
     if (!btn) return;
     const t = btn.dataset.tab;
-    if (t === 'cat') go((document.body.dataset.mode || 'listen') === 'read' ? 'read' : 'cat/new');
+    // Кнопка главной всегда ведёт на главную, в каком бы режиме ни была библиотека.
+    const { parts: cur } = parseHash();
+    const curHead = cur[0] || 'cat';
+    const onThisTab = t === 'cat' ? (curHead === 'cat' && (cur[1] || 'new') === 'new') : curHead === t;
+    if (onThisTab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    if (t === 'cat') go('cat/new');
     else if (t === 'library') go('library');
     else if (t === 'my') go('my');
     else if (t === 'lib') go('lib');
