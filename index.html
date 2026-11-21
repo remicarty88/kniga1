@@ -75,9 +75,9 @@
     <svg viewBox="0 0 24 24" fill="none"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
     <span class="tabbar-label">Главная</span>
   </button>
-  <button class="tabbar-btn" data-tab="lib" aria-label="Библиотека">
-    <svg viewBox="0 0 24 24" fill="none"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v17H6.5A2.5 2.5 0 0 0 4 22zM20 5.5A2.5 2.5 0 0 0 17.5 3H13v17h4.5a2.5 2.5 0 0 1 2.5 2z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-    <span class="tabbar-label">Библиотека</span>
+  <button class="tabbar-btn" data-tab="lib" aria-label="Моя полка">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M3 8h18M3 16h18M6.5 8V4m5.5 4V4M17.5 8V4M6.5 16v4m5.5-4v4m5.5-4v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    <span class="tabbar-label">Полка</span>
   </button>
   <button class="tabbar-btn tabbar-listen" data-tab="player" aria-label="Слушать">
     <svg viewBox="0 0 24 24" fill="none"><path d="M4 10v4m4-8v12m4-15v18m4-14v10m4-7v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -178,6 +178,10 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Экран входа/регистрации и окно сохранения данных доступа -->
+<div class="gate is-hidden" id="gate"></div>
+<div class="modal is-hidden" id="accm"></div>
 
 <!-- Скрытый контейнер встроенного поиска (используется для поиска книг для чтения) -->
 <div class="cse-hidden" id="cse-hidden" aria-hidden="true"></div>

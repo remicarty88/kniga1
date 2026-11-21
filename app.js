@@ -729,7 +729,7 @@ function route() {
   if (head === 'search') return openSearch(q.get('q') || '');
   if (head === 'book') return renderBook(parts[1]);
   if (head === 'my') return renderMy();
-  if (head === 'lib') return renderLib();
+  if (head === 'lib') return renderShelf();
   if (head === 'read') return renderReadList();
   if (head === 'rgenres') return renderReadGenres();
   if (head === 'rgenre') return renderReadGenre(parts[1], decodeURIComponent(parts[2] || ''));
@@ -777,7 +777,7 @@ function netUpdate() {
   document.body.classList.toggle('is-offline', off);
   const { parts } = parseHash();
   const head = parts[0] || '';
-  const main = ['', 'cat', 'genres', 'genre', 'search', 'my', 'lib'].includes(head);
+  const main = ['', 'cat', 'genres', 'genre', 'search', 'my'].includes(head);   // «Полка» остаётся доступной офлайн
   if (off) {
     if (main) go('cat/offline', { replace: true });
     else route();                       // обновляем таб-бар, не срывая чтение книги
@@ -1144,32 +1144,7 @@ function renderMy() {
   syncPlaying();
 }
 
-/* «Библиотека» — только моё: скачанное и начатое. */
-function renderLib() {
-  ++state.seq;
-  state.cat = 'lib';
-  state.back = 'lib';
-  state.items = [];
-  state.ended = true;
-  state.loading = false;
-  clearTail();
-  const list = dl.offlineList();
-  const books = dl.offlineReadList();
-  const started = books.length ? new Set(books.map(b => b.id)) : null;
-  const read = continueReadHTML('Начатое', 8, started);
-  if (!list.length && !books.length && !read) {
-    view.innerHTML = stateHTML('Библиотека пуста', 'Скачанные для офлайна и начатые книги появятся здесь.');
-    return;
-  }
-  view.innerHTML =
-    (list.length ? `<div class="section-title">Аудиокниги · ${list.length}</div>${offlineGridHTML(list)}` : '') +
-    (books.length ? `<div class="section-title">Книги для чтения · ${books.length}</div>${offlineReadGridHTML(books)}` : '') +
-    read;
-  bindOfflineDel(list, renderLib);
-  bindOfflineReadDel(books, renderLib);
-  bindContinueRead();
-  syncPlaying();
-}
+/* «Моя полка» — сохранённые книги и прогресс (см. раздел 17.5). */
 
 /* ---------- 11. Жанры ---------- */
 
@@ -1572,7 +1547,10 @@ async function renderBook(slug) {
       ${b.chapters.length ? `<button class="play-cta" id="play-cta">
         <svg viewBox="3 2 18 20" fill="none"><path d="M15 12.3301L9 16.6603L9 8L15 12.3301Z" fill="currentColor"/></svg>
         ${playing ? 'Продолжить' : 'Слушать'}</button>
-      <button class="dl-cta" id="dl-cta">${dlIcon}${dlLabel(dl.meta(b.slug))}</button>` : ''}
+      <div class="book-actions">
+        <button class="dl-cta" id="dl-cta">${dlIcon}${dlLabel(dl.meta(b.slug))}</button>
+        <button class="shelf-cta" id="shelf-cta" data-kind="audio" data-id="${esc(b.slug)}">${plusIcon}На полку</button>
+      </div>` : ''}
       ${b.description ? `<div class="section-title">Описание</div><div class="book-desc">${esc(b.description)}</div>` : ''}
       ${b.chapters.length > 1 ? `<div class="section-title">Главы</div>
         <div class="sheet-chapters">${b.chapters.map((c, i) => chapterRow(c, i, playing ? player.index : -1)).join('')}</div>` : ''}`;
@@ -1596,6 +1574,14 @@ async function renderBook(slug) {
         if (state.route === 'book/' + b.slug) renderBook(b.slug);
       }
     };
+    const shelfBtn = $('#shelf-cta');
+    if (shelfBtn) {
+      paintShelfBtn(shelfBtn, 'audio', b.slug);
+      shelfBtn.onclick = () => toggleShelfFromBook(shelfBtn, {
+        kind: 'audio', id: b.slug, title: b.title,
+        author: (b.authors || [])[0] || '', cover: b.cover || '',
+      });
+    }
     view.querySelectorAll('.chap').forEach(btn => {
       btn.onclick = () => {
         const i = Number(btn.dataset.i);
@@ -1727,7 +1713,10 @@ async function renderReadBook(id) {
         </div>
       </div>
       <button class="play-cta" id="read-cta">${bookIcon}${page > 1 ? `Продолжить — стр. ${page}${pos && pos.t ? ' из ' + pos.t : ''}` : 'Читать онлайн'}</button>
-      <button class="dl-cta" id="dl-cta">${dlIcon}${dlLabel(dl.meta('r' + id))}</button>
+      <div class="book-actions">
+        <button class="dl-cta" id="dl-cta">${dlIcon}${dlLabel(dl.meta('r' + id))}</button>
+        <button class="shelf-cta" id="shelf-cta" data-kind="read" data-id="${esc(id)}">${plusIcon}На полку</button>
+      </div>
       ${b.description ? `<div class="section-title">Описание</div><div class="book-desc">${esc(b.description)}</div>` : ''}`;
     $('#back').onclick = () => history.length > 1 ? history.back() : go('read');
     $('#read-cta').onclick = () => {
@@ -1746,6 +1735,14 @@ async function renderReadBook(id) {
         if (state.route === 'rbook/' + id) renderReadBook(id);
       }
     };
+    const shelfBtn = $('#shelf-cta');
+    if (shelfBtn) {
+      paintShelfBtn(shelfBtn, 'read', id);
+      shelfBtn.onclick = () => toggleShelfFromBook(shelfBtn, {
+        kind: 'read', id, title: b.title,
+        author: b.author || '', cover: b.cover || '',
+      });
+    }
   } catch (e) {
     if (seq !== state.seq) return;
     view.innerHTML = back + stateHTML('Ошибка', errorText(e), { label: 'Повторить' });
@@ -2129,6 +2126,7 @@ function rdSync() {
   const { id, src, total, si } = rdView;
   if (!id) return;
   store.set('lr:pos:' + id, { p: src, t: total, c: si, title: rdView.title }, 365 * 24 * 3600e3);
+  shelfProgress('read', id, { pct: rdProgress(), page: src, total, si });
   const cnt = $('#rd-page');
   if (cnt) cnt.textContent = src + ' / ' + total;
   const bar = $('#rd-pct');
@@ -2460,6 +2458,12 @@ const player = {
       index: this.index,
       position: audio.currentTime || 0,
     }, 365 * 24 * 3600e3);
+    // Прогресс книги, стоящей на полке, отправляем в облако.
+    const chapters = this.book.chapters || [];
+    let before = 0, total = 0;
+    chapters.forEach((c, i) => { const d = Number(c.duration) || 0; total += d; if (i < this.index) before += d; });
+    const pct = total ? Math.min(100, Math.round((before + (audio.currentTime || 0)) / total * 100)) : 0;
+    shelfProgress('audio', this.book.slug, { pct, ch: this.index, pos: Math.round(audio.currentTime || 0) });
   },
 };
 
@@ -2566,6 +2570,598 @@ function applyTheme(mode) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem('polka:theme', theme);
   $('meta[name="theme-color"]').setAttribute('content', theme === 'light' ? '#f7f7f8' : '#000000');
+}
+
+/* ---------- 17.5 Аккаунт, Firebase и «Моя полка» ---------- */
+/* Сервер данных — Realtime Database по REST: запись/чтение + поток событий
+   (text/event-stream) для синхронизации в реальном времени между устройствами.
+   Локально держим только сессию и кэш полки — приложение остаётся офлайн-первым. */
+
+const FB = 'https://detective-8e070-default-rtdb.firebaseio.com';
+
+async function fbReq(path, method = 'GET', data) {
+  const opts = { method, cache: 'no-store' };
+  if (data !== undefined) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(data); }
+  const r = await fetch(`${FB}/${path}.json`, opts);
+  if (!r.ok) throw new Error('fb' + r.status);
+  if (method === 'GET') return r.json();
+  return r.json().catch(() => null);
+}
+
+/* --- Идентификаторы и пароли --- */
+
+const ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // без похожих O/0/I/1
+
+function randChars(n) {
+  const buf = new Uint8Array(n);
+  if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(buf);
+  else for (let i = 0; i < n; i++) buf[i] = Math.floor(Math.random() * 256);
+  let out = '';
+  for (let i = 0; i < n; i++) out += ID_ALPHABET[buf[i] % ID_ALPHABET.length];
+  return out;
+}
+
+const genUserId = () => 'BK' + randChars(6);
+
+async function sha256hex(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function djb2hex(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h.toString(16);
+}
+
+/* Схема хэша записана в префиксе, поэтому вход работает и там, где WebCrypto
+   недоступен (не-защищённый контекст): s1 — SHA-256, d1 — резервный. */
+async function makeHash(uid, pass) {
+  if (crypto.subtle) { try { return 's1:' + await sha256hex(uid + ':' + pass); } catch {} }
+  return 'd1:' + djb2hex(uid + ':' + pass);
+}
+
+async function verifyHash(uid, pass, stored) {
+  if (!stored) return false;
+  if (String(stored).startsWith('d1:')) return 'd1:' + djb2hex(uid + ':' + pass) === stored;
+  if (crypto.subtle) { try { return 's1:' + await sha256hex(uid + ':' + pass) === stored; } catch { return false; } }
+  return false;
+}
+
+/* --- Локальное состояние --- */
+
+let acc = null;              // { uid, name, pass, createdAt }
+let shelf = {};             // { 'a:slug' | 'r:id': entry }
+let fbStream = null;        // AbortController активного потока
+let fbPoll = 0;             // таймер резервного опроса
+let pushTimer = 0;
+let nameTimer = 0;
+let syncState = 'idle';
+
+const shelfKey = (kind, id) => (kind === 'audio' ? 'a:' : 'r:') + id;
+const isShelfRoute = () => state.route === 'lib/';
+
+function accLoad() { try { acc = JSON.parse(localStorage.getItem('polka:account')) || null; } catch { acc = null; } }
+function accSave() { try { localStorage.setItem('polka:account', JSON.stringify(acc)); } catch {} }
+function shelfLoad() { try { shelf = JSON.parse(localStorage.getItem('polka:shelf')) || {}; } catch { shelf = {}; } }
+/* Локальный «сейф» аккаунта: резерв для входа без сети и повторного входа
+   на этом же устройстве, если сервер данных недоступен. */
+function vaultSave() {
+  if (!acc || !acc.uid) return;
+  try { localStorage.setItem('polka:acc:' + acc.uid, JSON.stringify({ ...acc, shelf })); } catch {}
+}
+function vaultGet(uid) {
+  try { const v = JSON.parse(localStorage.getItem('polka:acc:' + uid)); return v && v.pass ? v : null; } catch { return null; }
+}
+function shelfSave() { try { localStorage.setItem('polka:shelf', JSON.stringify(shelf)); } catch {} vaultSave(); }
+
+function syncText(s) {
+  return s === 'sync' ? 'Синхронизация…'
+    : s === 'offline' ? 'Нет связи — сохраним позже'
+    : s === 'ok' ? 'Синхронизировано'
+    : 'Готово';
+}
+function setSync(s) {
+  syncState = s;
+  const el = $('#shelf-sync');
+  if (el) el.textContent = syncText(s);
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, ta.value.length);
+      const ok = document.execCommand('copy'); ta.remove(); return ok;
+    } catch { return false; }
+  }
+}
+
+/* --- Операции с полкой --- */
+
+function shelfHas(kind, id) { return !!shelf[shelfKey(kind, id)]; }
+
+function shelfAdd(entry) {
+  if (!acc) { openGate('register'); return null; }
+  const key = shelfKey(entry.kind, entry.id);
+  const prev = shelf[key] || {};
+  shelf[key] = { ...prev, ...entry, addedAt: prev.addedAt || Date.now(), updatedAt: Date.now() };
+  shelfSave(); pushShelf(); refreshShelfButtons();
+  return shelf[key];
+}
+
+function shelfRemove(kind, id) {
+  delete shelf[shelfKey(kind, id)];
+  shelfSave(); pushShelf(); refreshShelfButtons();
+}
+
+function shelfProgress(kind, id, prog) {
+  const e = shelf[shelfKey(kind, id)];
+  if (!e) return;
+  e.prog = { ...(e.prog || {}), ...prog };
+  e.updatedAt = Date.now();
+  shelfSave(); pushShelf();
+}
+
+function pushShelf() {
+  if (!acc) return;
+  clearTimeout(pushTimer);
+  setSync('sync');
+  pushTimer = setTimeout(async () => {
+    try {
+      await fbReq('users/' + acc.uid + '/shelf', 'PUT', shelf);
+      await fbReq('users/' + acc.uid + '/updatedAt', 'PUT', Date.now());
+      setSync('ok');
+    } catch { setSync('offline'); }
+  }, 1600);
+}
+
+function pushName() {
+  if (!acc) return;
+  clearTimeout(nameTimer);
+  setSync('sync');
+  nameTimer = setTimeout(async () => {
+    try { await fbReq('users/' + acc.uid + '/name', 'PUT', acc.name || ''); setSync('ok'); }
+    catch { setSync('offline'); }
+  }, 1200);
+}
+
+async function pushAccount() {
+  if (!acc) return;
+  await fbReq('users/' + acc.uid, 'PUT', {
+    name: acc.name || '', pass: acc.pass, createdAt: acc.createdAt || Date.now(),
+    updatedAt: Date.now(), shelf,
+  });
+}
+
+/* --- Синхронизация --- */
+
+async function pullUser() {
+  const node = await fbReq('users/' + acc.uid);
+  if (node) applyRemoteNode(node);
+}
+
+function applyRemoteNode(n) {
+  if (!n || typeof n !== 'object') return;
+  if (n.shelf) applyRemoteShelf(n.shelf);
+  if (n.name && n.name !== acc.name) {
+    acc.name = n.name; accSave();
+    const inp = $('#shelf-name'); if (inp) inp.value = n.name;
+  }
+}
+
+function applyRemoteShelf(remote) {
+  const next = (remote && typeof remote === 'object') ? remote : {};
+  if (JSON.stringify(next) === JSON.stringify(shelf)) return;
+  shelf = next; shelfSave();
+  refreshShelfButtons();
+  if (isShelfRoute()) renderShelf();
+}
+
+function stopRealtime() {
+  if (fbStream) { try { fbStream.abort(); } catch {} fbStream = null; }
+  if (fbPoll) { clearInterval(fbPoll); fbPoll = 0; }
+}
+
+/* Поток событий: сервер присылает put/patch по мере изменений. */
+function startRealtime() {
+  if (!acc) return;
+  stopRealtime();
+  const ctrl = new AbortController();
+  fbStream = ctrl;
+  fetch(`${FB}/users/${acc.uid}.json`, { headers: { Accept: 'text/event-stream' }, cache: 'no-store', signal: ctrl.signal })
+    .then(async res => {
+      if (!res.ok || !res.body) throw new Error('stream');
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '', evt = '', data = '';
+      const flush = () => { if (data) applyStream(evt, data); evt = ''; data = ''; };
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i).replace(/\r$/, '');
+          buf = buf.slice(i + 1);
+          if (line === '') { flush(); continue; }
+          if (line.startsWith('event:')) evt = line.slice(6).trim();
+          else if (line.startsWith('data:')) data += line.slice(5).trim();
+        }
+      }
+      throw new Error('closed');
+    })
+    .catch(() => { if (fbStream === ctrl) { fbStream = null; startPoll(); } });
+}
+
+function applyStream(evt, raw) {
+  if (!acc) return;
+  let msg; try { msg = JSON.parse(raw); } catch { return; }
+  const atRoot = msg.path === '/' || msg.path === '';
+  if (evt === 'put') {
+    if (atRoot || msg.path === '/shelf' || msg.path === '/name') {
+      if (atRoot) applyRemoteNode(msg.data);
+      else if (msg.path === '/shelf') applyRemoteShelf(msg.data);
+      else if (msg.data !== acc.name) { acc.name = msg.data || ''; accSave(); const inp = $('#shelf-name'); if (inp) inp.value = acc.name; }
+    }
+  } else if (evt === 'patch' && atRoot) {
+    for (const k of Object.keys(msg.data || {})) {
+      if (k === 'shelf') applyRemoteShelf(msg.data[k]);
+      else if (k === 'name' && msg.data[k] !== acc.name) {
+        acc.name = msg.data[k] || ''; accSave();
+        const inp = $('#shelf-name'); if (inp) inp.value = acc.name;
+      }
+    }
+  }
+}
+
+/* Резервный опрос — включается, если поток недоступен (правила/сеть/прокси). */
+function startPoll() {
+  if (fbPoll || !acc) return;
+  setSync('sync');
+  const tick = async () => {
+    try { await pullUser(); setSync('ok'); }
+    catch { setSync('offline'); }
+  };
+  tick();
+  fbPoll = setInterval(tick, 12000);
+}
+
+/* --- Вход, регистрация, сессия --- */
+
+async function uniqueUserId() {
+  for (let i = 0; i < 6; i++) {
+    const uid = genUserId();
+    try { const ex = await fbReq('users/' + uid + '/createdAt'); if (!ex) return uid; }
+    catch { return uid; }   // нет сети — создаём локально, синхронизируем позже
+  }
+  throw new Error('id');
+}
+
+async function createAccount(name, pass) {
+  const uid = await uniqueUserId();
+  const hash = await makeHash(uid, pass);
+  acc = { uid, name: String(name || '').trim() || ('Читатель ' + uid.slice(-4)), pass: hash, createdAt: Date.now() };
+  accSave(); shelf = {}; shelfSave();
+  try { await pushAccount(); setSync('ok'); }
+  catch { setSync('offline'); toast('Аккаунт создан. Синхронизируем при появлении сети'); }
+  afterAuth();
+  return acc;
+}
+
+async function loginAccount(rawId, pass) {
+  const uid = String(rawId || '').trim().toUpperCase();
+  if (!uid) { const e = new Error('empty'); e.code = 'empty'; throw e; }
+  let node = null, failed = false;
+  try { node = await fbReq('users/' + uid); }
+  catch { failed = true; }
+  // Резерв: вход по локально сохранённым данным (офлайн или сервер недоступен).
+  if (!node) {
+    const local = vaultGet(uid);
+    if (local && await verifyHash(uid, pass, local.pass)) {
+      acc = { uid, name: local.name || '', pass: local.pass, createdAt: local.createdAt || Date.now() };
+      accSave();
+      shelf = (local.shelf && typeof local.shelf === 'object') ? local.shelf : {};
+      shelfSave();
+      afterAuth();
+      return acc;
+    }
+    const e = new Error(failed ? 'offline' : 'notfound');
+    e.code = failed ? 'offline' : 'notfound';
+    throw e;
+  }
+  if (!await verifyHash(uid, pass, node.pass)) { const e = new Error('badpass'); e.code = 'badpass'; throw e; }
+  acc = { uid, name: node.name || '', pass: node.pass, createdAt: node.createdAt || Date.now() };
+  accSave();
+  shelf = (node.shelf && typeof node.shelf === 'object') ? node.shelf : {};
+  shelfSave();
+  afterAuth();
+  return acc;
+}
+
+function afterAuth() {
+  closeGate();
+  startRealtime();
+  refreshShelfButtons();
+  if (isShelfRoute()) renderShelf();
+}
+
+function logout() {
+  stopRealtime();
+  clearTimeout(pushTimer); clearTimeout(nameTimer);
+  acc = null; shelf = {};
+  try { localStorage.removeItem('polka:account'); localStorage.removeItem('polka:shelf'); } catch {}
+  openGate('register');
+}
+
+/* --- Экран входа --- */
+
+let gateMode = 'register';
+let gateUid = '';
+
+const refreshIcon = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11a8 8 0 1 0-.9 4.5M20 5v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const copyIcon = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.2" stroke="currentColor" stroke-width="1.7"/><path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+
+function openGate(mode = 'register') {
+  gateMode = mode;
+  if (!gateUid) gateUid = genUserId();
+  const g = $('#gate');
+  g.classList.remove('is-hidden');
+  g.innerHTML = gateHTML();
+  bindGate();
+  document.documentElement.classList.add('gated');
+}
+
+function closeGate() {
+  const g = $('#gate');
+  if (g) { g.classList.add('is-hidden'); g.innerHTML = ''; }
+  document.documentElement.classList.remove('gated');
+}
+
+function gateHTML() {
+  const reg = gateMode === 'register';
+  return `
+    <div class="gate-bg"></div>
+    <div class="gate-card">
+      <img class="gate-logo" src="assets/images/bookify-logo.jpg" alt="" />
+      <h1 class="gate-title">${reg ? 'Добро пожаловать' : 'Вход в аккаунт'}</h1>
+      <p class="gate-sub">${reg
+        ? 'Профиль сохранит ваши книги и прогресс — они будут доступны на любом устройстве.'
+        : 'Введите ID и пароль, чтобы вернуть свою полку и прогресс.'}</p>
+      ${reg ? `
+      <div class="gate-field">
+        <label>Ваш ID</label>
+        <div class="id-box">
+          <b id="gate-uid">${esc(gateUid)}</b>
+          <button type="button" class="copy-btn" id="gate-newid" title="Новый ID">${refreshIcon}</button>
+          <button type="button" class="copy-btn" id="gate-copyid" title="Скопировать">${copyIcon}</button>
+        </div>
+      </div>
+      <div class="gate-field">
+        <label for="gate-name">Имя</label>
+        <input id="gate-name" type="text" maxlength="40" autocomplete="nickname" placeholder="Как вас зовут" />
+      </div>` : `
+      <div class="gate-field">
+        <label for="gate-idin">Ваш ID</label>
+        <input id="gate-idin" type="text" maxlength="12" autocapitalize="characters" autocomplete="username" placeholder="BK000000" />
+      </div>`}
+      <div class="gate-field">
+        <label for="gate-pass">Пароль</label>
+        <input id="gate-pass" type="password" maxlength="64" autocomplete="${reg ? 'new-password' : 'current-password'}" placeholder="Минимум 4 символа" />
+      </div>
+      <button class="gate-primary" id="gate-submit">${reg ? 'Создать аккаунт' : 'Войти'}</button>
+      <button class="gate-switch" id="gate-switch">${reg ? 'Уже есть ID? Войти' : 'Создать новый аккаунт'}</button>
+      <p class="gate-note">Данные нужны только для синхронизации вашей полки.</p>
+    </div>`;
+}
+
+function bindGate() {
+  if (gateMode === 'register') {
+    $('#gate-newid').onclick = () => { gateUid = genUserId(); $('#gate-uid').textContent = gateUid; };
+    $('#gate-copyid').onclick = async () => toast(await copyText(gateUid) ? 'ID скопирован' : 'Не удалось скопировать');
+  }
+  $('#gate-switch').onclick = () => openGate(gateMode === 'register' ? 'login' : 'register');
+  const submit = $('#gate-submit');
+  submit.onclick = () => submitGate(submit);
+  $('#gate').querySelectorAll('input').forEach(inp => inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); submitGate(submit); }
+  }));
+}
+
+async function submitGate(btn) {
+  const pass = ($('#gate-pass') || {}).value || '';
+  if (pass.length < 4) { toast('Пароль — минимум 4 символа'); return; }
+  if (gateMode === 'register') {
+    const name = ($('#gate-name') || {}).value || '';
+    const uid = gateUid;
+    btn.disabled = true; btn.textContent = 'Создаём…';
+    try {
+      await createAccount(name, pass);
+      showCreds(uid, pass, name);
+    } catch {
+      toast('Не удалось создать аккаунт');
+      btn.disabled = false; btn.textContent = 'Создать аккаунт';
+    }
+  } else {
+    const id = ($('#gate-idin') || {}).value || '';
+    btn.disabled = true; btn.textContent = 'Входим…';
+    try {
+      await loginAccount(id, pass);
+      toast('С возвращением!');
+    } catch (e) {
+      toast(e.code === 'notfound' ? 'Аккаунт с таким ID не найден'
+        : e.code === 'badpass' ? 'Неверный пароль'
+        : 'Нет сети — попробуйте позже');
+      btn.disabled = false; btn.textContent = 'Войти';
+    }
+  }
+}
+
+/* Окно с данными доступа: кнопки «копировать» и просьба сделать скриншот. */
+function showCreds(uid, pass, name) {
+  const m = $('#accm');
+  const masked = '••••••';
+  m.classList.remove('is-hidden');
+  m.innerHTML = `
+    <div class="modal-bg"></div>
+    <div class="modal-card">
+      <div class="cred-badge">✓</div>
+      <h2>${pass ? 'Аккаунт создан' : 'Данные для входа'}</h2>
+      <p class="cred-note">${pass
+        ? 'Сохраните данные доступа — по ним вы войдёте на другом устройстве. Сделайте скриншот этого экрана.'
+        : 'Ваш ID для входа. Сделайте скриншот этого экрана.'}</p>
+      <div class="cred-row">
+        <span class="cred-k">ID</span>
+        <b class="cred-v">${esc(uid)}</b>
+        <button class="copy-btn" data-copy="${esc(uid)}">${copyIcon}Копировать</button>
+      </div>
+      ${pass ? `<div class="cred-row">
+        <span class="cred-k">Пароль</span>
+        <b class="cred-v" id="cred-pass" data-val="${esc(pass)}">${esc(masked)}</b>
+        <button class="copy-btn" id="cred-eye">Показать</button>
+      </div>` : ''}
+      ${name ? `<div class="cred-row"><span class="cred-k">Имя</span><b class="cred-v">${esc(name)}</b></div>` : ''}
+      <button class="modal-primary" id="cred-copy-all">Скопировать всё</button>
+      <label class="cred-check"><input type="checkbox" id="cred-shot" /> Я сделал(а) скриншот и сохранил(а) данные</label>
+      <button class="modal-primary" id="cred-go" disabled>Продолжить</button>
+    </div>`;
+
+  const all = pass ? `ID: ${uid}\nПароль: ${pass}` : `ID: ${uid}`;
+  m.querySelectorAll('.copy-btn[data-copy]').forEach(b => b.onclick = async () => {
+    toast(await copyText(b.dataset.copy) ? 'Скопировано' : 'Не удалось скопировать');
+  });
+  const eye = $('#cred-eye');
+  if (eye) eye.onclick = () => {
+    const v = $('#cred-pass');
+    const shown = v.textContent !== masked;
+    v.textContent = shown ? masked : v.dataset.val;
+    eye.textContent = shown ? 'Показать' : 'Скрыть';
+  };
+  $('#cred-copy-all').onclick = async () => toast(await copyText(all) ? 'Данные скопированы' : 'Не удалось скопировать');
+  const shot = $('#cred-shot'), go = $('#cred-go');
+  shot.onchange = () => { go.disabled = !shot.checked; };
+  go.onclick = () => {
+    m.classList.add('is-hidden'); m.innerHTML = '';
+    if (isShelfRoute()) renderShelf();
+  };
+}
+
+/* --- Полка --- */
+
+const plusIcon = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>';
+const checkIcon = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+function paintShelfBtn(btn, kind, id) {
+  const on = shelfHas(kind, id);
+  btn.classList.toggle('is-on', on);
+  btn.innerHTML = (on ? checkIcon : plusIcon) + (on ? 'На полке' : 'На полку');
+}
+
+function refreshShelfButtons() {
+  $$('.shelf-cta[data-kind]').forEach(btn => paintShelfBtn(btn, btn.dataset.kind, btn.dataset.id));
+}
+
+/* Кнопка «На полку» на странице книги: добавляет/убирает и отражает состояние. */
+function toggleShelfFromBook(btn, info) {
+  if (shelfHas(info.kind, info.id)) {
+    shelfRemove(info.kind, info.id);
+    toast('Убрано с полки');
+  } else {
+    if (!shelfAdd(info)) return;   // нет аккаунта — открыли экран входа
+    toast('Добавлено на полку');
+  }
+  if (btn) paintShelfBtn(btn, info.kind, info.id);
+}
+
+function shelfCardHTML(e) {
+  const key = shelfKey(e.kind, e.id);
+  const pct = Math.max(0, Math.min(100, Math.round((e.prog && e.prog.pct) || 0)));
+  const href = e.kind === 'audio' ? `#/book/${esc(e.id)}` : `#/rbook/${esc(e.id)}`;
+  const img = e.cover ? (e.kind === 'audio' ? coverImg(e.cover) : lrCover(e.cover)) : '';
+  return `<a class="shelf-card" href="${href}" data-key="${esc(key)}">
+    <div class="shelf-cover">
+      ${img ? `<img src="${esc(img)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : '<span class="shelf-ph"></span>'}
+      <span class="shelf-kind">${e.kind === 'audio' ? 'Аудио' : 'Текст'}</span>
+      ${pct > 0 ? `<span class="shelf-pct">${pct}%</span>` : ''}
+      <span class="shelf-prog"><i style="width:${pct}%"></i></span>
+      <button class="shelf-del" data-key="${esc(key)}" aria-label="Убрать с полки" title="Убрать с полки">✕</button>
+    </div>
+    <div class="shelf-title">${esc(e.title || 'Без названия')}</div>
+    <div class="shelf-sub">${esc(e.author || '')}</div>
+  </a>`;
+}
+
+function shelfHeadHTML() {
+  const initial = ((acc.name || 'Ч').trim().charAt(0) || 'Ч').toUpperCase();
+  return `<div class="shelf-head">
+    <div class="shelf-ava">${esc(initial)}</div>
+    <div class="shelf-who">
+      <input class="shelf-name" id="shelf-name" value="${esc(acc.name || '')}" placeholder="Ваше имя" maxlength="40" />
+      <div class="shelf-id">ID <b>${esc(acc.uid)}</b></div>
+      <div class="shelf-sync" id="shelf-sync">${esc(syncText(syncState))}</div>
+    </div>
+    <button class="shelf-more" id="shelf-menu" aria-label="Меню профиля">⋯</button>
+  </div>
+  <div class="shelf-menu is-hidden" id="shelf-menu-panel">
+    <button data-m="creds">Данные для входа</button>
+    <button data-m="copy">Скопировать ID</button>
+    <button data-m="out" class="is-danger">Выйти</button>
+  </div>`;
+}
+
+function renderShelf() {
+  ++state.seq;
+  state.cat = 'lib'; state.back = 'lib'; state.items = []; state.ended = true; state.loading = false;
+  clearTail();
+  if (!acc) { view.innerHTML = stateHTML('Нужен вход', 'Войдите в аккаунт, чтобы открыть полку.'); return; }
+  const list = Object.values(shelf).filter(e => e && e.id).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const audio = list.filter(e => e.kind === 'audio');
+  const read = list.filter(e => e.kind === 'read');
+  view.innerHTML = shelfHeadHTML() + (list.length
+    ? (audio.length ? `<div class="section-title">Аудиокниги · ${audio.length}</div><div class="shelf-grid">${audio.map(shelfCardHTML).join('')}</div>` : '') +
+      (read.length ? `<div class="section-title">Книги для чтения · ${read.length}</div><div class="shelf-grid">${read.map(shelfCardHTML).join('')}</div>` : '')
+    : `<div class="shelf-empty">
+        <div class="shelf-empty-ico">${plusIcon}</div>
+        <b>Полка пока пуста</b>
+        <span>Откройте книгу или аудиокнигу и нажмите «На полку» — она появится здесь вместе с прогрессом.</span>
+        <button class="gate-primary" id="shelf-goto">Найти книги</button>
+      </div>`);
+  bindShelf();
+  syncPlaying();
+}
+
+function bindShelf() {
+  const name = $('#shelf-name');
+  if (name) name.addEventListener('change', () => { acc.name = name.value.trim().slice(0, 40); accSave(); pushName(); });
+  const menu = $('#shelf-menu');
+  if (menu) menu.onclick = () => $('#shelf-menu-panel').classList.toggle('is-hidden');
+  const panel = $('#shelf-menu-panel');
+  if (panel) panel.addEventListener('click', async e => {
+    const b = e.target.closest('button[data-m]');
+    if (!b) return;
+    if (b.dataset.m === 'creds') showCreds(acc.uid, null, acc.name);
+    else if (b.dataset.m === 'copy') toast(await copyText(acc.uid) ? 'ID скопирован' : 'Не удалось скопировать');
+    else if (b.dataset.m === 'out') { if (confirm('Выйти из аккаунта?')) logout(); }
+  });
+  const goto = $('#shelf-goto');
+  if (goto) goto.onclick = () => go('cat/new');
+  $$('.shelf-del[data-key]').forEach(btn => btn.onclick = e => {
+    e.preventDefault(); e.stopPropagation();
+    delete shelf[btn.dataset.key];
+    shelfSave(); pushShelf();
+    toast('Убрано с полки');
+    renderShelf();
+  });
+}
+
+function accountBoot() {
+  accLoad(); shelfLoad();
+  window.addEventListener('online', () => { if (acc) { pushShelf(); if (!fbStream && !fbPoll) startRealtime(); } });
+  if (acc && acc.uid) afterAuth();
+  else openGate('register');
 }
 
 /* ---------- 18. Инициализация ---------- */
@@ -2681,6 +3277,8 @@ function boot() {
   document.body.classList.toggle('is-offline', startOffline);
   if (!location.hash) go(startOffline ? 'cat/offline' : (localStorage.getItem('polka:mode') === 'read' ? 'read' : 'cat/new'), { replace: true });
   else route();
+
+  accountBoot();
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
