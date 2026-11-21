@@ -709,8 +709,8 @@ function route() {
   const home = head === 'cat' && (parts[1] || 'new') === 'new';
   const offline = document.body.classList.contains('is-offline');
   const isCat = head === 'cat' || head === 'genres' || head === 'genre';
-  // На «Мои книги» и «Библиотеку» режим не переключаем — там и аудио, и тексты.
-  if (head !== 'my' && head !== 'lib') applyMode(READ_HEADS.includes(head) ? 'read' : 'listen');
+  // На профиле и полке режим каталога не влияет на содержимое страницы.
+  if (!['my', 'lib', 'library'].includes(head)) applyMode(READ_HEADS.includes(head) ? 'read' : 'listen');
   rdPage(reader);   // тема страницы — только в читалке
   // В читалке не должно быть ничего лишнего: только текст и кнопка настроек.
   document.body.classList.toggle('is-reader', reader);
@@ -721,7 +721,7 @@ function route() {
   $('#chips').classList.toggle('is-hidden', searching);
   $('#search-bar').classList.toggle('is-hidden', !searching);
   markTab(head, parts[1]);
-  markTabbar(head, parts[1], offline);
+  markTabbar(head, parts[1]);
 
   if (head === 'cat') return parts[1] === 'offline' ? renderOffline() : renderCatalog(parts[1] || 'new');
   if (head === 'genres') return renderGenres();
@@ -730,6 +730,7 @@ function route() {
   if (head === 'book') return renderBook(parts[1]);
   if (head === 'my') return renderMy();
   if (head === 'lib') return renderShelf();
+  if (head === 'library') return renderLibrary();
   if (head === 'read') return renderReadList();
   if (head === 'rgenres') return renderReadGenres();
   if (head === 'rgenre') return renderReadGenre(parts[1], decodeURIComponent(parts[2] || ''));
@@ -762,12 +763,12 @@ function markTab(head, param) {
   });
 }
 
-/* Активный пункт нижнего таб-бара. Без интернета активен только «Офлайн». */
-function markTabbar(head, param, offline) {
+/* Активный пункт нижнего таб-бара. */
+function markTabbar(head, param) {
   let key = 'cat';
-  if (offline) key = 'offline';
-  else if (head === 'my') key = 'my';
+  if (head === 'my') key = 'my';
   else if (head === 'lib') key = 'lib';
+  else if (head === 'library' || head === 'genres' || head === 'genre' || head === 'rgenres' || head === 'rgenre' || head === 'read' || (head === 'cat' && param === 'offline')) key = 'library';
   $$('.tabbar-btn').forEach(b => b.classList.toggle('is-active', b.dataset.tab === key));
 }
 
@@ -777,7 +778,7 @@ function netUpdate() {
   document.body.classList.toggle('is-offline', off);
   const { parts } = parseHash();
   const head = parts[0] || '';
-  const main = ['', 'cat', 'genres', 'genre', 'search', 'my'].includes(head);   // «Полка» остаётся доступной офлайн
+  const main = ['', 'cat', 'genres', 'genre', 'search'].includes(head);
   if (off) {
     if (main) go('cat/offline', { replace: true });
     else route();                       // обновляем таб-бар, не срывая чтение книги
@@ -913,59 +914,39 @@ const homeCardHTML = (b, i) => `
   </a>`;
 
 function homeShellHTML() {
-  const featureIcon = (d) => `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">${d}</svg>`;
   return `
     <section class="home-hero">
       <div class="home-hero-image"></div>
       <div class="home-hero-copy">
         <span class="home-kicker">BOOKIFY · ТВОЯ БИБЛИОТЕКА</span>
         <h1>Твой мир<br>в книгах</h1>
-        <p>Книги и аудиокниги<br>в одном приложении</p>
-        <button class="home-cta" id="home-start">Начать читать <span>›</span></button>
+        <p>Выбирай историю, которая<br>подходит именно тебе</p>
+        <button class="home-cta" id="home-start">Открыть библиотеку <span>›</span></button>
       </div>
     </section>
-    <div class="home-stats" aria-label="Возможности Bookify">
-      <button data-home="catalog">${featureIcon('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15.5H6.5A2.5 2.5 0 0 0 4 21z" fill="currentColor"/><path d="M9 7v7" stroke="#fff" stroke-width="1.5"/>')}<b>Книги</b><small>большой выбор</small></button>
-      <button data-home="listen">${featureIcon('<path d="M3 13v-1a9 9 0 0 1 18 0v1M3 13h3v6H5a2 2 0 0 1-2-2zm18 0h-3v6h1a2 2 0 0 0 2-2z" fill="currentColor"/>')}<b>Аудиокниги</b><small>слушай везде</small></button>
-      <button data-home="read">${featureIcon('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v17H6.5A2.5 2.5 0 0 0 4 22zM20 5.5A2.5 2.5 0 0 0 17.5 3H13v17h4.5a2.5 2.5 0 0 1 2.5 2z" fill="currentColor"/>')}<b>Читалка</b><small>удобный формат</small></button>
-      <button data-home="offline">${featureIcon('<path d="M12 3v11m0 0-4-4m4 4 4-4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>')}<b>Офлайн</b><small>читай без сети</small></button>
-    </div>
     <section class="home-section">
       <div class="home-section-head"><h2><i>🔥</i> Популярное сегодня</h2><button data-home="popular">Все <span>→</span></button></div>
       <div class="home-books" id="home-books">${Array.from({ length: 4 }, () => '<div class="home-book-skeleton"><i></i><b></b><small></small></div>').join('')}</div>
     </section>
-    <section class="home-features">
-      <button class="home-feature home-feature-audio" data-home="listen">
-        <img class="feature-art" src="assets/images/card-audio-cartoon.jpg" alt="" />
-        <span class="feature-tag">СЛУШАТЬ</span><b>Аудиокниги</b><small>Истории, которые<br>всегда с тобой</small><span class="feature-link">Слушать <i>→</i></span>
-      </button>
-      <button class="home-feature home-feature-reader" data-home="read">
-        <img class="feature-art" src="assets/images/card-reader-cartoon.jpg" alt="" />
-        <span class="feature-tag">ЧИТАТЬ</span><b>Читалка</b><small>Тихое место<br>для новых историй</small><span class="feature-link">Открыть <i>→</i></span>
-      </button>
-    </section>
     <section class="home-section home-recommend">
-      <div class="home-section-head"><h2><i>⭐</i> Рекомендации для вас</h2><button data-home="genres">Все <span>→</span></button></div>
+      <div class="home-section-head"><h2><i>⭐</i> Жанры</h2><button data-home="genres">Все <span>→</span></button></div>
       <div class="home-genres">
-        <button class="is-active" data-home="genres"><span>✧</span>Фантастика</button>
-        <button data-home="genres"><span>⌕</span>Детективы</button>
-        <button data-home="genres"><span>♡</span>Романы</button>
-        <button data-home="genres"><span>▤</span>Бизнес</button>
-        <button data-home="genres"><span>❋</span>Саморазвитие</button>
-        <button data-home="genres"><span>⌂</span>История</button>
+        <button class="is-active" data-home="genres"><span>✦</span>Фантастика</button>
+        <button data-home="genres"><span>⌕</span>Детектив</button>
+        <button data-home="genres"><span>♡</span>Романтика</button>
+        <button data-home="genres"><span>▤</span>Приключения</button>
+        <button data-home="genres"><span>❋</span>История</button>
       </div>
     </section>
     <div class="home-extra">${continueListenHTML()}${continueReadHTML('Продолжить чтение', 2)}</div>`;
 }
 
 function bindHome() {
-  $('#home-start')?.addEventListener('click', () => { applyMode('read'); go('read'); });
+  $('#home-start')?.addEventListener('click', () => go('library'));
   $$('[data-home]').forEach(btn => btn.addEventListener('click', () => {
     const action = btn.dataset.home;
-    if (action === 'listen' || action === 'popular') { applyMode('listen'); go('cat/popular'); }
-    else if (action === 'read') { applyMode('read'); go('read'); }
-    else if (action === 'offline') go('cat/offline');
-    else if (action === 'genres') { applyMode('listen'); go('genres'); }
+    if (action === 'popular') { applyMode('listen'); go('cat/popular'); }
+    else if (action === 'genres') go('library');
     else go('cat/new');
   }));
   const cl = $('#cont-listen');
@@ -1123,25 +1104,85 @@ function bindContinueListen() {
   };
 }
 
-/* «Мои книги» — то, что сейчас слушаю и читаю. */
+/* Профиль: имя аккаунта и личная статистика. */
 function renderMy() {
+  renderProfile();
+}
+
+function profileProgressHTML() {
+  const list = Object.values(shelf)
+    .filter(e => e && e.id && Number(e.prog && e.prog.pct) > 0 && Number(e.prog.pct) < 100)
+    .sort((a, b) => Number(b.prog.pct) - Number(a.prog.pct))
+    .slice(0, 8);
+  return list.length ? list.map(e => {
+    const pct = Math.max(0, Math.min(100, Math.round(Number(e.prog.pct) || 0)));
+    const href = e.kind === 'audio' ? `#/book/${esc(e.id)}` : `#/rbook/${esc(e.id)}`;
+    return `<a class="profile-progress-row" href="${href}">
+      <span class="profile-progress-type">${e.kind === 'audio' ? 'Аудио' : 'Чтение'}</span>
+      <span class="profile-progress-main"><b>${esc(e.title || 'Без названия')}</b><span class="profile-progress-track"><i style="width:${pct}%"></i></span></span>
+      <span class="profile-progress-pct">${pct}%</span>
+    </a>`;
+  }).join('') : '<div class="profile-no-progress">Прогресс появится здесь, когда вы начнёте читать или слушать книгу с полки.</div>';
+}
+
+function profileHTML() {
+  const initial = ((acc.name || 'Ч').trim().charAt(0) || 'Ч').toUpperCase();
+  return `<section class="profile-card">
+    <div class="profile-identity">
+      <div class="profile-avatar" id="profile-avatar">${esc(initial)}</div>
+      <div class="profile-who">
+        <label class="profile-label" for="profile-name">Ваш профиль</label>
+        <input class="profile-name" id="profile-name" value="${esc(acc.name || '')}" placeholder="Ваше имя" maxlength="40" />
+        <div class="profile-id">ID <b>${esc(acc.uid)}</b></div>
+      </div>
+    </div>
+    <div class="profile-actions">
+      <button class="profile-action" id="profile-creds">Данные для входа</button>
+      <button class="profile-action" id="profile-copy">Скопировать ID</button>
+      <button class="profile-action is-danger" id="profile-logout">Выйти</button>
+    </div>
+    <div class="profile-sync"><span class="profile-sync-dot"></span><span id="shelf-sync">${esc(syncText(syncState))}</span></div>
+  </section>
+  <section class="profile-stats" aria-label="Статистика чтения">
+    <article class="profile-stat profile-stat-time"><span class="profile-stat-icon">◷</span><small>В приложении</small><b id="profile-hours">${esc(profileHours())}</b></article>
+    <article class="profile-stat profile-stat-done"><span class="profile-stat-icon">✓</span><small>Завершено</small><b><span id="profile-completed">${profileCompletedCount()}</span> книг</b></article>
+    <article class="profile-stat profile-stat-progress"><span class="profile-stat-icon">↗</span><small>В процессе</small><b><span id="profile-progress-count">${Object.values(shelf).filter(e => e && Number(e.prog && e.prog.pct) > 0 && Number(e.prog.pct) < 100).length}</span> книг</b></article>
+  </section>
+  <section class="profile-progress">
+    <div class="profile-section-title"><div><span class="library-eyebrow">ТВОЁ ЧТЕНИЕ</span><h2>Прогресс книг</h2></div><a href="#/lib">Моя полка <span>→</span></a></div>
+    <div id="profile-progress-list">${profileProgressHTML()}</div>
+  </section>`;
+}
+
+function renderProfile() {
   ++state.seq;
-  state.cat = 'my';
+  state.cat = 'profile';
   state.back = 'my';
   state.items = [];
   state.ended = true;
   state.loading = false;
   clearTail();
-  const listen = continueListenHTML();
-  const read = continueReadHTML();
-  if (!listen && !read) {
-    view.innerHTML = stateHTML('Пока пусто', 'Начните слушать аудиокнигу или читать книгу — они появятся здесь.');
+  if (!acc) {
+    view.innerHTML = stateHTML('Нужен вход', 'Войдите в аккаунт, чтобы открыть профиль.');
     return;
   }
-  view.innerHTML = listen + read;
-  bindContinueListen();
-  bindContinueRead();
-  syncPlaying();
+  view.innerHTML = profileHTML();
+  bindProfile();
+}
+
+function bindProfile() {
+  const name = $('#profile-name');
+  name.addEventListener('change', () => {
+    acc.name = name.value.trim().slice(0, 40) || ('Читатель ' + acc.uid.slice(-4));
+    name.value = acc.name;
+    const avatar = $('#profile-avatar');
+    if (avatar) avatar.textContent = acc.name.charAt(0).toUpperCase();
+    accSave();
+    pushName();
+  });
+  $('#profile-creds').onclick = () => showCreds(acc.uid, null, acc.name);
+  $('#profile-copy').onclick = async () => toast(await copyText(acc.uid) ? 'ID скопирован' : 'Не удалось скопировать');
+  $('#profile-logout').onclick = () => { if (confirm('Выйти из аккаунта?')) logout(); };
 }
 
 /* «Моя полка» — сохранённые книги и прогресс (см. раздел 17.5). */
@@ -1149,6 +1190,81 @@ function renderMy() {
 /* ---------- 11. Жанры ---------- */
 
 const arrowIcon = '<svg class="arrow" viewBox="0 0 24 24" fill="none"><path d="M10.5858 6.34317L12 4.92896L19.0711 12L12 19.0711L10.5858 17.6569L16.2427 12L10.5858 6.34317Z" fill="currentColor"/></svg>';
+
+function libraryHTML(kind) {
+  const reading = kind === 'read';
+  return `<section class="library-welcome">
+    <span class="library-eyebrow">BOOKIFY · КАТАЛОГ</span>
+    <h1>Библиотека</h1>
+    <p>Выберите, как хотите провести время с книгой.</p>
+  </section>
+  <div class="library-switch" id="library-switch" role="tablist" aria-label="Формат книги">
+    <button class="library-option ${reading ? '' : 'is-active'}" data-library-kind="audio" role="tab" aria-selected="${!reading}">Аудиокниги</button>
+    <button class="library-option ${reading ? 'is-active' : ''}" data-library-kind="read" role="tab" aria-selected="${reading}">Читать</button>
+  </div>
+  <div class="library-shortcuts">
+    ${reading
+      ? `<a href="#/read"><span>✦</span><b>Новинки</b><small>Свежие книги</small></a>
+         <a href="#/rgenres"><span>⌘</span><b>Все жанры</b><small>Найти свою историю</small></a>`
+      : `<a href="#/cat/new"><span>✦</span><b>Новинки</b><small>Недавно добавлены</small></a>
+         <a href="#/cat/popular"><span>↗</span><b>Популярное</b><small>Выбор читателей</small></a>
+         <a href="#/cat/rating"><span>★</span><b>Рейтинг</b><small>Лучшие оценки</small></a>
+         <a href="#/cat/offline"><span>↓</span><b>Офлайн</b><small>Скачанные книги</small></a>`}
+  </div>
+  <div class="library-genre-heading">
+    <div><span class="library-eyebrow">ПОДБОРКИ</span><h2>${reading ? 'Жанры для чтения' : 'Жанры аудиокниг'}</h2></div>
+  </div>
+  <div id="library-genres" class="library-genres ${reading ? 'is-reading' : ''}">
+    ${'<div class="library-genre-skeleton"></div>'.repeat(reading ? 4 : 6)}
+  </div>`;
+}
+
+async function renderLibrary(kind = document.body.dataset.mode === 'read' ? 'read' : 'audio') {
+  const seq = ++state.seq;
+  const reading = kind === 'read';
+  applyMode(reading ? 'read' : 'listen');
+  state.cat = 'library';
+  state.back = 'library';
+  state.items = [];
+  state.ended = true;
+  state.loading = false;
+  clearTail();
+  view.innerHTML = libraryHTML(reading ? 'read' : 'audio');
+  $('#library-switch').addEventListener('click', e => {
+    const btn = e.target.closest('[data-library-kind]');
+    if (btn) renderLibrary(btn.dataset.libraryKind);
+  });
+  try {
+    if (reading) {
+      const groups = await apiLrGenres();
+      if (seq !== state.seq) return;
+      $('#library-genres').innerHTML = groups.length
+        ? groups.map((g, i) => `<details class="library-genre-group tone-${i % 6}">
+            <summary>
+              <span class="library-genre-icon">${['✦','⌕','♡','▤','❋','◈'][i % 6]}</span>
+              <span class="library-genre-copy"><b>${esc(g.name)}</b><small>${(g.subs || []).length} жанров</small></span>
+              <span class="library-group-arrow">⌄</span>
+            </summary>
+            <div class="library-genre-children">${(g.subs || []).map(s => `<a href="#/rgenre/${esc(s.id)}/${encodeURIComponent(s.name)}">${esc(s.name)}</a>`).join('')}</div>
+          </details>`).join('')
+        : '<div class="library-empty">Жанры пока недоступны.</div>';
+    } else {
+      const genres = await apiGenres();
+      if (seq !== state.seq) return;
+      $('#library-genres').innerHTML = genres.length
+        ? genres.map((g, i) => `<a class="library-genre-card tone-${i % 6}" href="#/genre/${esc(g.slug)}">
+            <span class="library-genre-icon">${['✦','⌕','♡','▤','❋','◈'][i % 6]}</span>
+            <span class="library-genre-copy"><b>${esc(g.name)}</b><small>${esc(g.count)}</small></span>
+            ${arrowIcon}
+          </a>`).join('')
+        : '<div class="library-empty">Жанры пока недоступны.</div>';
+    }
+  } catch (e) {
+    if (seq !== state.seq) return;
+    $('#library-genres').innerHTML = `<div class="library-empty">Не удалось загрузить жанры.<button id="library-retry">Повторить</button></div>`;
+    $('#library-retry').onclick = () => renderLibrary(kind);
+  }
+}
 
 async function renderGenres() {
   const seq = ++state.seq;
@@ -2156,7 +2272,11 @@ async function rdFlip(dir) {
   const want = rdView.si + dir;
   if (want >= 0 && want < rdView.cols) { rdView.si = want; rdPlace(); rdSync(); return; }
   const next = rdView.src + dir;
-  if (next < 1 || next > rdView.total) return;
+  if (next < 1) return;
+  if (next > rdView.total) {
+    if (dir > 0) markBookCompleted('read', rdView.id, rdView.title);
+    return;
+  }
   rdView.busy = true;
   let d;
   try { d = await rdLoad(rdView.id, next); }
@@ -2371,7 +2491,10 @@ const player = {
 
   next(auto = false) {
     if (this.index >= this.chapters.length - 1) {
-      if (auto) { audio.pause(); toast('Книга закончилась'); }
+      if (auto) {
+        audio.pause();
+        markBookCompleted('audio', this.book.slug, this.book.title);
+      }
       return;
     }
     this.load(this.book, this.index + 1, true);
@@ -2632,28 +2755,138 @@ async function verifyHash(uid, pass, stored) {
 
 let acc = null;              // { uid, name, pass, createdAt }
 let shelf = {};             // { 'a:slug' | 'r:id': entry }
+let profileStats = { activeSeconds: 0, completed: {} };
 let fbStream = null;        // AbortController активного потока
 let fbPoll = 0;             // таймер резервного опроса
 let pushTimer = 0;
 let nameTimer = 0;
+let statsTimer = 0;
+let activityTimer = 0;
+let lastActivityAt = Date.now();
+let lastStatsSyncAt = 0;
 let syncState = 'idle';
 
 const shelfKey = (kind, id) => (kind === 'audio' ? 'a:' : 'r:') + id;
 const isShelfRoute = () => state.route === 'lib/';
 
 function accLoad() { try { acc = JSON.parse(localStorage.getItem('polka:account')) || null; } catch { acc = null; } }
-function accSave() { try { localStorage.setItem('polka:account', JSON.stringify(acc)); } catch {} }
+function accSave() { try { localStorage.setItem('polka:account', JSON.stringify(acc)); } catch {} vaultSave(); }
 function shelfLoad() { try { shelf = JSON.parse(localStorage.getItem('polka:shelf')) || {}; } catch { shelf = {}; } }
 /* Локальный «сейф» аккаунта: резерв для входа без сети и повторного входа
    на этом же устройстве, если сервер данных недоступен. */
 function vaultSave() {
   if (!acc || !acc.uid) return;
-  try { localStorage.setItem('polka:acc:' + acc.uid, JSON.stringify({ ...acc, shelf })); } catch {}
+  try { localStorage.setItem('polka:acc:' + acc.uid, JSON.stringify({ ...acc, shelf, stats: profileStats })); } catch {}
 }
 function vaultGet(uid) {
   try { const v = JSON.parse(localStorage.getItem('polka:acc:' + uid)); return v && v.pass ? v : null; } catch { return null; }
 }
 function shelfSave() { try { localStorage.setItem('polka:shelf', JSON.stringify(shelf)); } catch {} vaultSave(); }
+
+function statsLoad(remote) {
+  if (!acc || !acc.uid) {
+    profileStats = { activeSeconds: 0, completed: {} };
+    return;
+  }
+  let local = {};
+  try { local = JSON.parse(localStorage.getItem('polka:stats:' + acc.uid)) || {}; } catch {}
+  const cloud = remote && typeof remote === 'object' ? remote : {};
+  profileStats = {
+    activeSeconds: Math.max(Number(local.activeSeconds) || 0, Number(cloud.activeSeconds) || 0),
+    completed: { ...(local.completed || {}), ...(cloud.completed || {}) },
+  };
+  statsSave(false);
+}
+
+function statsSave(sync = false) {
+  if (!acc || !acc.uid) return;
+  try { localStorage.setItem('polka:stats:' + acc.uid, JSON.stringify(profileStats)); } catch {}
+  vaultSave();
+  if (sync) pushStats();
+  updateProfileStats();
+}
+
+function pushStats() {
+  if (!acc) return;
+  clearTimeout(statsTimer);
+  setSync('sync');
+  statsTimer = setTimeout(async () => {
+    try {
+      await fbReq('users/' + acc.uid + '/stats', 'PUT', profileStats);
+      lastStatsSyncAt = Date.now();
+      setSync('ok');
+    } catch { lastStatsSyncAt = Date.now(); setSync('offline'); }
+  }, 1800);
+}
+
+function applyRemoteStats(remote) {
+  if (!remote || typeof remote !== 'object') return;
+  const completed = { ...(profileStats.completed || {}), ...(remote.completed || {}) };
+  const next = {
+    activeSeconds: Math.max(Number(profileStats.activeSeconds) || 0, Number(remote.activeSeconds) || 0),
+    completed,
+  };
+  if (JSON.stringify(next) === JSON.stringify(profileStats)) return;
+  profileStats = next;
+  statsSave(false);
+}
+
+function completedKey(kind, id) { return (kind === 'audio' ? 'a:' : 'r:') + id; }
+
+function markBookCompleted(kind, id, title) {
+  if (!acc || !id) return;
+  const key = completedKey(kind, id);
+  if (profileStats.completed[key]) return;
+  profileStats.completed[key] = { title: String(title || '').slice(0, 180), completedAt: Date.now() };
+  const entry = shelf[shelfKey(kind, id)];
+  if (entry) {
+    entry.prog = { ...(entry.prog || {}), pct: 100, complete: true };
+    entry.updatedAt = Date.now();
+    shelfSave();
+    pushShelf();
+  }
+  statsSave(true);
+  toast('Книга завершена');
+}
+
+function profileHours() {
+  const seconds = Math.max(0, Math.floor(profileStats.activeSeconds || 0));
+  const hours = Math.floor(seconds / 3600), minutes = Math.floor((seconds % 3600) / 60);
+  return hours ? `${hours} ч ${minutes} мин` : `${minutes} мин`;
+}
+
+function profileCompletedCount() {
+  const completed = new Set(Object.keys(profileStats.completed || {}));
+  Object.values(shelf).forEach(e => {
+    if (e && e.id && ((e.prog && e.prog.complete) || Number(e.prog && e.prog.pct) >= 100))
+      completed.add(completedKey(e.kind, e.id));
+  });
+  return completed.size;
+}
+
+function updateProfileStats() {
+  const hours = $('#profile-hours'), done = $('#profile-completed'), progress = $('#profile-progress-count');
+  if (hours) hours.textContent = profileHours();
+  if (done) done.textContent = profileCompletedCount();
+  if (progress) progress.textContent = Object.values(shelf).filter(e => e && Number(e.prog && e.prog.pct) > 0 && Number(e.prog.pct) < 100).length;
+  const rows = $('#profile-progress-list');
+  if (rows) rows.innerHTML = profileProgressHTML();
+}
+
+function startActivityTracking() {
+  if (activityTimer) clearInterval(activityTimer);
+  lastActivityAt = Date.now();
+  document.addEventListener('visibilitychange', () => { lastActivityAt = Date.now(); });
+  activityTimer = setInterval(() => {
+    const now = Date.now();
+    const elapsed = Math.min(30, Math.max(0, Math.floor((now - lastActivityAt) / 1000)));
+    lastActivityAt = now;
+    if (!acc || document.visibilityState !== 'visible' || !elapsed) return;
+    profileStats.activeSeconds = (Number(profileStats.activeSeconds) || 0) + elapsed;
+    const shouldSync = now - lastStatsSyncAt >= 60000;
+    statsSave(shouldSync);
+  }, 15000);
+}
 
 function syncText(s) {
   return s === 'sync' ? 'Синхронизация…'
@@ -2689,13 +2922,13 @@ function shelfAdd(entry) {
   const key = shelfKey(entry.kind, entry.id);
   const prev = shelf[key] || {};
   shelf[key] = { ...prev, ...entry, addedAt: prev.addedAt || Date.now(), updatedAt: Date.now() };
-  shelfSave(); pushShelf(); refreshShelfButtons();
+  shelfSave(); pushShelf(); refreshShelfButtons(); updateProfileStats();
   return shelf[key];
 }
 
 function shelfRemove(kind, id) {
   delete shelf[shelfKey(kind, id)];
-  shelfSave(); pushShelf(); refreshShelfButtons();
+  shelfSave(); pushShelf(); refreshShelfButtons(); updateProfileStats();
 }
 
 function shelfProgress(kind, id, prog) {
@@ -2703,7 +2936,7 @@ function shelfProgress(kind, id, prog) {
   if (!e) return;
   e.prog = { ...(e.prog || {}), ...prog };
   e.updatedAt = Date.now();
-  shelfSave(); pushShelf();
+  shelfSave(); pushShelf(); updateProfileStats();
 }
 
 function pushShelf() {
@@ -2733,7 +2966,7 @@ async function pushAccount() {
   if (!acc) return;
   await fbReq('users/' + acc.uid, 'PUT', {
     name: acc.name || '', pass: acc.pass, createdAt: acc.createdAt || Date.now(),
-    updatedAt: Date.now(), shelf,
+    updatedAt: Date.now(), shelf, stats: profileStats,
   });
 }
 
@@ -2747,9 +2980,11 @@ async function pullUser() {
 function applyRemoteNode(n) {
   if (!n || typeof n !== 'object') return;
   if (n.shelf) applyRemoteShelf(n.shelf);
+  if (n.stats) applyRemoteStats(n.stats);
   if (n.name && n.name !== acc.name) {
     acc.name = n.name; accSave();
-    const inp = $('#shelf-name'); if (inp) inp.value = n.name;
+    const inp = $('#profile-name'); if (inp) inp.value = n.name;
+    const ava = $('#profile-avatar'); if (ava) ava.textContent = (n.name.trim().charAt(0) || 'Ч').toUpperCase();
   }
 }
 
@@ -2759,6 +2994,7 @@ function applyRemoteShelf(remote) {
   shelf = next; shelfSave();
   refreshShelfButtons();
   if (isShelfRoute()) renderShelf();
+  if (state.route === 'my/') renderProfile();
 }
 
 function stopRealtime() {
@@ -2802,17 +3038,19 @@ function applyStream(evt, raw) {
   let msg; try { msg = JSON.parse(raw); } catch { return; }
   const atRoot = msg.path === '/' || msg.path === '';
   if (evt === 'put') {
-    if (atRoot || msg.path === '/shelf' || msg.path === '/name') {
+    if (atRoot || msg.path === '/shelf' || msg.path === '/name' || msg.path === '/stats') {
       if (atRoot) applyRemoteNode(msg.data);
       else if (msg.path === '/shelf') applyRemoteShelf(msg.data);
-      else if (msg.data !== acc.name) { acc.name = msg.data || ''; accSave(); const inp = $('#shelf-name'); if (inp) inp.value = acc.name; }
+      else if (msg.path === '/stats') applyRemoteStats(msg.data);
+      else if (msg.data !== acc.name) { acc.name = msg.data || ''; accSave(); const inp = $('#profile-name'); if (inp) inp.value = acc.name; }
     }
   } else if (evt === 'patch' && atRoot) {
     for (const k of Object.keys(msg.data || {})) {
       if (k === 'shelf') applyRemoteShelf(msg.data[k]);
+      else if (k === 'stats') applyRemoteStats(msg.data[k]);
       else if (k === 'name' && msg.data[k] !== acc.name) {
         acc.name = msg.data[k] || ''; accSave();
-        const inp = $('#shelf-name'); if (inp) inp.value = acc.name;
+        const inp = $('#profile-name'); if (inp) inp.value = acc.name;
       }
     }
   }
@@ -2845,7 +3083,9 @@ async function createAccount(name, pass) {
   const uid = await uniqueUserId();
   const hash = await makeHash(uid, pass);
   acc = { uid, name: String(name || '').trim() || ('Читатель ' + uid.slice(-4)), pass: hash, createdAt: Date.now() };
+  profileStats = { activeSeconds: 0, completed: {} };
   accSave(); shelf = {}; shelfSave();
+  statsSave(false);
   try { await pushAccount(); setSync('ok'); }
   catch { setSync('offline'); toast('Аккаунт создан. Синхронизируем при появлении сети'); }
   afterAuth();
@@ -2865,6 +3105,7 @@ async function loginAccount(rawId, pass) {
       acc = { uid, name: local.name || '', pass: local.pass, createdAt: local.createdAt || Date.now() };
       accSave();
       shelf = (local.shelf && typeof local.shelf === 'object') ? local.shelf : {};
+      statsLoad(local.stats);
       shelfSave();
       afterAuth();
       return acc;
@@ -2877,6 +3118,7 @@ async function loginAccount(rawId, pass) {
   acc = { uid, name: node.name || '', pass: node.pass, createdAt: node.createdAt || Date.now() };
   accSave();
   shelf = (node.shelf && typeof node.shelf === 'object') ? node.shelf : {};
+  statsLoad(node.stats);
   shelfSave();
   afterAuth();
   return acc;
@@ -2887,12 +3129,16 @@ function afterAuth() {
   startRealtime();
   refreshShelfButtons();
   if (isShelfRoute()) renderShelf();
+  if (state.route === 'my/') renderProfile();
+  updateProfileStats();
 }
 
 function logout() {
   stopRealtime();
   clearTimeout(pushTimer); clearTimeout(nameTimer);
+  clearTimeout(statsTimer);
   acc = null; shelf = {};
+  profileStats = { activeSeconds: 0, completed: {} };
   try { localStorage.removeItem('polka:account'); localStorage.removeItem('polka:shelf'); } catch {}
   openGate('register');
 }
@@ -3094,24 +3340,6 @@ function shelfCardHTML(e) {
   </a>`;
 }
 
-function shelfHeadHTML() {
-  const initial = ((acc.name || 'Ч').trim().charAt(0) || 'Ч').toUpperCase();
-  return `<div class="shelf-head">
-    <div class="shelf-ava">${esc(initial)}</div>
-    <div class="shelf-who">
-      <input class="shelf-name" id="shelf-name" value="${esc(acc.name || '')}" placeholder="Ваше имя" maxlength="40" />
-      <div class="shelf-id">ID <b>${esc(acc.uid)}</b></div>
-      <div class="shelf-sync" id="shelf-sync">${esc(syncText(syncState))}</div>
-    </div>
-    <button class="shelf-more" id="shelf-menu" aria-label="Меню профиля">⋯</button>
-  </div>
-  <div class="shelf-menu is-hidden" id="shelf-menu-panel">
-    <button data-m="creds">Данные для входа</button>
-    <button data-m="copy">Скопировать ID</button>
-    <button data-m="out" class="is-danger">Выйти</button>
-  </div>`;
-}
-
 function renderShelf() {
   ++state.seq;
   state.cat = 'lib'; state.back = 'lib'; state.items = []; state.ended = true; state.loading = false;
@@ -3120,34 +3348,26 @@ function renderShelf() {
   const list = Object.values(shelf).filter(e => e && e.id).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   const audio = list.filter(e => e.kind === 'audio');
   const read = list.filter(e => e.kind === 'read');
-  view.innerHTML = shelfHeadHTML() + (list.length
+  view.innerHTML = `<section class="shelf-page-head">
+    <span class="library-eyebrow">ТВОЯ КОЛЛЕКЦИЯ</span>
+    <h1>Моя полка</h1>
+    <p>${list.length ? `${list.length} ${list.length === 1 ? 'книга' : 'книг'} сохранено` : 'Сохраняй книги, чтобы вернуться к ним позже.'}</p>
+  </section>` + (list.length
     ? (audio.length ? `<div class="section-title">Аудиокниги · ${audio.length}</div><div class="shelf-grid">${audio.map(shelfCardHTML).join('')}</div>` : '') +
       (read.length ? `<div class="section-title">Книги для чтения · ${read.length}</div><div class="shelf-grid">${read.map(shelfCardHTML).join('')}</div>` : '')
     : `<div class="shelf-empty">
         <div class="shelf-empty-ico">${plusIcon}</div>
         <b>Полка пока пуста</b>
         <span>Откройте книгу или аудиокнигу и нажмите «На полку» — она появится здесь вместе с прогрессом.</span>
-        <button class="gate-primary" id="shelf-goto">Найти книги</button>
+        <button class="gate-primary" id="shelf-goto">Открыть библиотеку</button>
       </div>`);
   bindShelf();
   syncPlaying();
 }
 
 function bindShelf() {
-  const name = $('#shelf-name');
-  if (name) name.addEventListener('change', () => { acc.name = name.value.trim().slice(0, 40); accSave(); pushName(); });
-  const menu = $('#shelf-menu');
-  if (menu) menu.onclick = () => $('#shelf-menu-panel').classList.toggle('is-hidden');
-  const panel = $('#shelf-menu-panel');
-  if (panel) panel.addEventListener('click', async e => {
-    const b = e.target.closest('button[data-m]');
-    if (!b) return;
-    if (b.dataset.m === 'creds') showCreds(acc.uid, null, acc.name);
-    else if (b.dataset.m === 'copy') toast(await copyText(acc.uid) ? 'ID скопирован' : 'Не удалось скопировать');
-    else if (b.dataset.m === 'out') { if (confirm('Выйти из аккаунта?')) logout(); }
-  });
   const goto = $('#shelf-goto');
-  if (goto) goto.onclick = () => go('cat/new');
+  if (goto) goto.onclick = () => go('library');
   $$('.shelf-del[data-key]').forEach(btn => btn.onclick = e => {
     e.preventDefault(); e.stopPropagation();
     delete shelf[btn.dataset.key];
@@ -3159,7 +3379,9 @@ function bindShelf() {
 
 function accountBoot() {
   accLoad(); shelfLoad();
-  window.addEventListener('online', () => { if (acc) { pushShelf(); if (!fbStream && !fbPoll) startRealtime(); } });
+  statsLoad();
+  startActivityTracking();
+  window.addEventListener('online', () => { if (acc) { pushShelf(); pushStats(); if (!fbStream && !fbPoll) startRealtime(); } });
   if (acc && acc.uid) afterAuth();
   else openGate('register');
 }
@@ -3207,12 +3429,6 @@ function bindUI() {
     }
   });
 
-  $('#btn-mode').onclick = () => {
-    const next = document.body.dataset.mode === 'read' ? 'listen' : 'read';
-    applyMode(next);
-    go(next === 'read' ? 'read' : 'cat/new');
-  };
-
   $('#chips').addEventListener('click', e => {
     const tab = e.target.closest('.chip-tab');
     if (!tab || tab.dataset.m !== (document.body.dataset.mode || 'listen')) return;
@@ -3226,9 +3442,9 @@ function bindUI() {
     if (!btn) return;
     const t = btn.dataset.tab;
     if (t === 'cat') go((document.body.dataset.mode || 'listen') === 'read' ? 'read' : 'cat/new');
+    else if (t === 'library') go('library');
     else if (t === 'my') go('my');
     else if (t === 'lib') go('lib');
-    else if (t === 'offline') go('cat/offline');
     else if (t === 'player') {
       if (player.book) return openSheet();
       if (loadLast({ autoplay: true })) openSheet();
@@ -3245,8 +3461,6 @@ function bindUI() {
     else if (e.key === 'ArrowLeft') { e.preventDefault(); rdFlip(-1); }
   });
 
-  const toTop = $('#to-top');
-  toTop.onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
   // Офлайн-режим реагирует на пропажу и возвращение сети
   window.addEventListener('online', netUpdate);
   window.addEventListener('offline', netUpdate);
@@ -3254,7 +3468,6 @@ function bindUI() {
     if (dl.task) { dl.task.cancel = true; $('#dl-sub').textContent = 'Останавливаю…'; }
   };
   window.addEventListener('scroll', () => {
-    toTop.hidden = window.scrollY < 900;
     saveScroll();
   }, { passive: true });
 }

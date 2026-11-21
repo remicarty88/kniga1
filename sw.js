@@ -1,11 +1,11 @@
 /* Оболочка приложения в офлайн-кэше. Данные каталога кэшируются в localStorage.
    Стратегия: документ и код (js/css) — сеть-первым, чтобы обновления доезжали сразу;
    остальное — из кэша с фоновым обновлением. */
-const CACHE = 'polka-shell-v20';
+const CACHE = 'polka-shell-v21';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'icon.svg', 'manifest.webmanifest',
   'assets/images/home-hero.jpg', 'assets/images/reader-castle.jpg',
-  'assets/images/bookify-logo.jpg', 'assets/images/card-audio-cartoon.jpg', 'assets/images/card-reader-cartoon.jpg'
+  'assets/images/bookify-logo.jpg'
 ];
 
 self.addEventListener('install', e => {
